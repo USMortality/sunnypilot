@@ -1,3 +1,4 @@
+.claude/
 venv/
 .venv/
 .ci_cache

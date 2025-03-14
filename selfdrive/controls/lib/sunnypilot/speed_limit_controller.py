@@ -245,14 +245,6 @@ class SpeedLimitController:
       self.state = SpeedLimitControlState.inactive
       return
 
-    # In any case, we deactivate the speed limit controller temporarily if the user changes the cruise speed.
-    # Ignore if a minimum amount of time has not passed since activation. This is to prevent temp inactivations
-    # due to controlsd logic changing cruise setpoint when going active.
-    if self._engage_type == Engage.auto and self._v_cruise_setpoint_changed and \
-            self._current_time > (self._last_op_enabled_time + TEMP_INACTIVE_GUARD_PERIOD):
-      self.state = SpeedLimitControlState.tempInactive
-      return
-
     self.state_transition_strategy[self.state]()
 
     if self._engage_type == Engage.user_confirm:
