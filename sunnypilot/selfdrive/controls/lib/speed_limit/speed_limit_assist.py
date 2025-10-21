@@ -14,7 +14,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import PCM_LONG_REQUIRED_MAX_SET_SPEED, CONFIRM_SPEED_THRESHOLD
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import PCM_LONG_REQUIRED_MAX_SET_SPEED, CONFIRM_SPEED_THRESHOLD, CONFIRM_SPEED_DROP_PERCENTAGE
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.helpers import compare_cluster_target, set_speed_limit_assist_availability
 
@@ -191,14 +191,26 @@ class SpeedLimitAssist:
 
   @property
   def apply_confirm_speed_threshold(self) -> bool:
-    # below CST: always require user confirmation
-    if self.v_cruise_cluster_below_confirm_speed_threshold:
+    # Calculate percentage drop to filter out suspicious large drops (e.g., bad OSM data)
+    # Avoids false school zones and other faulty map data
+    if self.prev_speed_limit_final_last_conv <= 0:  # Avoid division by zero
+      return False
+
+    # Auto-apply speed limit increases
+    if self.speed_limit_final_last_conv >= self.prev_speed_limit_final_last_conv:
+      return False
+
+    # For decreases, check if drop percentage exceeds threshold
+    # Calculate percentage drop from old limit to new limit
+    drop_percentage = ((self.prev_speed_limit_final_last_conv - self.speed_limit_final_last_conv) /
+                       self.prev_speed_limit_final_last_conv) * 100
+
+    # Require confirmation for drops larger than threshold percentage
+    # This catches suspicious drops like 45→15 mph (67%) while allowing normal transitions
+    if drop_percentage > CONFIRM_SPEED_DROP_PERCENTAGE:
       return True
 
-    # at/above CST:
-    # - new speed limit >= CST: auto change
-    # - new speed limit < CST: user confirmation required
-    return bool(self.speed_limit_final_last_conv < CONFIRM_SPEED_THRESHOLD[self.is_metric])
+    return False
 
   def get_current_acceleration_as_target(self) -> float:
     return self.a_ego
@@ -266,7 +278,7 @@ class SpeedLimitAssist:
         elif self.state == SpeedLimitAssistState.pending:
           if self.target_set_speed_confirmed:
             self._update_confirmed_state()
-          elif self.speed_limit_changed:
+          elif self.speed_limit_changed and self.apply_confirm_speed_threshold:
             self.state = SpeedLimitAssistState.preActive
             self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
 
@@ -332,7 +344,7 @@ class SpeedLimitAssist:
 
         # INACTIVE
         elif self.state == SpeedLimitAssistState.inactive:
-          if self.speed_limit_changed:
+          if self.speed_limit_changed and self.apply_confirm_speed_threshold:
             self.state = SpeedLimitAssistState.preActive
             self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
           elif self._update_non_pcm_long_confirmed_state():
