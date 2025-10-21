@@ -17,3 +17,7 @@ CONFIRM_SPEED_THRESHOLD = {
   True: 80,   # km/h
   False: 50,  # mph
 }
+
+# Percentage drop threshold for requiring confirmation
+# Drops larger than this percentage are considered suspicious (e.g., bad OSM data)
+CONFIRM_SPEED_DROP_PERCENTAGE = 45  # percent
