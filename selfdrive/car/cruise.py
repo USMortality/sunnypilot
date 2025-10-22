@@ -112,6 +112,10 @@ class VCruiseHelper(VCruiseHelperSP):
       return
 
     long_press, v_cruise_delta = VCruiseHelperSP.update_v_cruise_delta(self, long_press, v_cruise_delta)
+
+    # Store old value before increment to detect if we cross SLC target
+    v_cruise_old = self.v_cruise_kph
+
     if long_press and self.v_cruise_kph % v_cruise_delta != 0:  # partial interval
       self.v_cruise_kph = CRUISE_NEAREST_FUNC[button_type](self.v_cruise_kph / v_cruise_delta) * v_cruise_delta
     else:
@@ -120,6 +124,20 @@ class VCruiseHelper(VCruiseHelperSP):
     # If set is pressed while overriding, clip cruise speed to minimum of vEgo
     if CS.gasPressed and button_type in (ButtonType.decelCruise, ButtonType.setCruise):
       self.v_cruise_kph = max(self.v_cruise_kph, CS.vEgo * CV.MS_TO_KPH)
+
+    # Snap to SLC target if we passed through it during increment
+    if self.has_speed_limit:
+      slc_target = self.speed_limit_final_last_kph
+      # Add small tolerance to avoid re-snapping due to floating point precision
+      # Only snap if we're clearly crossing through, not if already very close
+      tolerance = 0.5  # kph
+      # Check if we crossed the SLC target (old and new are on opposite sides)
+      if button_type == ButtonType.accelCruise and v_cruise_old < (slc_target - tolerance) < self.v_cruise_kph:
+        # SET+: crossed from below, snap to SLC
+        self.v_cruise_kph = slc_target
+      elif button_type == ButtonType.decelCruise and v_cruise_old > (slc_target + tolerance) > self.v_cruise_kph:
+        # SET-: crossed from above, snap to SLC
+        self.v_cruise_kph = slc_target
 
     self.v_cruise_kph = np.clip(round(self.v_cruise_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
 
