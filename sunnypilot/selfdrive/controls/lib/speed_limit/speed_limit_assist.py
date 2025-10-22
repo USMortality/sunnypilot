@@ -372,23 +372,12 @@ class SpeedLimitAssist:
     return enabled, active
 
   def update_events(self, events_sp: EventsSP) -> None:
-    if self.state == SpeedLimitAssistState.preActive:
+    # Only play tone when entering preActive state (when confirmation is needed)
+    if self.state == SpeedLimitAssistState.preActive and self._state_prev != SpeedLimitAssistState.preActive:
       events_sp.add(EventNameSP.speedLimitPreActive)
 
     if self.state == SpeedLimitAssistState.pending and self._state_prev != SpeedLimitAssistState.pending:
       events_sp.add(EventNameSP.speedLimitPending)
-
-    if self.is_active:
-      if self._state_prev not in ACTIVE_STATES:
-        self.update_active_event(events_sp)
-
-      # only notify if we acquire a valid speed limit
-      # do not check has_speed_limit here
-      elif self._speed_limit != self.speed_limit_prev:
-        if self.speed_limit_prev <= 0:
-          self.update_active_event(events_sp)
-        elif self.speed_limit_prev > 0 and self._speed_limit > 0:
-          self.update_active_event(events_sp)
 
   def update(self, long_enabled: bool, long_override: bool, v_ego: float, a_ego: float, v_cruise_cluster: float, speed_limit: float,
              speed_limit_final_last: float, has_speed_limit: bool, distance: float, events_sp: EventsSP) -> None:
