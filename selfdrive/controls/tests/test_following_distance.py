@@ -29,6 +29,7 @@ def run_following_distance_simulation(v_lead, t_end=100.0, e2e=False, personalit
                       [True, False], # e2e
                       [log.LongitudinalPersonality.relaxed, # personality
                        log.LongitudinalPersonality.standard,
+                       log.LongitudinalPersonality.sport,
                        log.LongitudinalPersonality.aggressive],
                       [0,10,35])) # speed
 class TestFollowingDistance:
