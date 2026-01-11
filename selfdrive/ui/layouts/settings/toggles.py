@@ -12,8 +12,8 @@ DESCRIPTIONS = {
   "DisengageOnAccelerator": "When enabled, pressing the accelerator pedal will disengage openpilot.",
   "LongitudinalPersonality": (
     "Standard is recommended. In aggressive mode, openpilot will follow lead cars closer and be more aggressive with the gas and brake. " +
-    "In relaxed mode openpilot will stay further away from lead cars. On supported cars, you can cycle through these personalities with " +
-    "your steering wheel distance button."
+    "Sport mode is a balance between aggressive and standard. In relaxed mode openpilot will stay further away from lead cars. " +
+    "On supported cars, you can cycle through these personalities with your steering wheel distance button."
   ),
   "IsLdwEnabled": (
     "Receive alerts to steer back into the lane when your vehicle drifts over a detected lane line " +
