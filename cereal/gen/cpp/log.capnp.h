@@ -8,7 +8,7 @@
 
 #ifndef CAPNP_VERSION
 #error "CAPNP_VERSION is not defined, is capnp/generated-header-support.h missing?"
-#elif CAPNP_VERSION != 1000002
+#elif CAPNP_VERSION != 1003000
 #error "Version mismatch between generated code and library headers.  You must use the same version of the Cap'n Proto compiler and library."
 #endif
 
@@ -130,6 +130,7 @@ CAPNP_DECLARE_ENUM(EventName, 91f1992a1f77fb03);
 CAPNP_DECLARE_SCHEMA(d692e23d1a247d99);
 enum class LongitudinalPersonality_d692e23d1a247d99: uint16_t {
   AGGRESSIVE,
+  SPORT,
   STANDARD,
   RELAXED,
 };
@@ -2941,7 +2942,7 @@ public:
 #endif  // !CAPNP_LITE
 
   template <typename Key2 = ::capnp::AnyPointer, typename Value2 = ::capnp::AnyPointer>
-  typename Map<Key2, Value2>::Reader asGeneric() {
+  typename Map<Key2, Value2>::Reader asGeneric() const {
     return typename Map<Key2, Value2>::Reader(_reader);
   }
 
@@ -3035,7 +3036,7 @@ public:
 #endif  // !CAPNP_LITE
 
   template <typename Key2 = ::capnp::AnyPointer, typename Value2 = ::capnp::AnyPointer>
-  typename Map<Key2, Value2>::Entry::Reader asMapGeneric() {
+  typename Map<Key2, Value2>::Entry::Reader asMapGeneric() const {
     return typename Map<Key2, Value2>::Entry::Reader(_reader);
   }
 
