@@ -8,12 +8,15 @@ import json
 import os
 from pathlib import Path
 
+from openpilot.common.params import Params, UnknownKeyName
+
 SLC_CONFIG_PATH = Path(os.getenv("SUNNYPILOT_SLC_CONFIG", "/data/sunnypilot/slc.json"))
 
 LOOKAHEAD_SPEED_FACTOR_MIN = 0.0
 LOOKAHEAD_SPEED_FACTOR_MAX = 10.0
 
 _config_cache: dict | None = None
+_params = Params()
 
 
 def _read_config() -> dict:
@@ -40,7 +43,23 @@ def _clip_float(value, minimum: float, maximum: float, default: float) -> float:
     return default
 
 
+def _get_param_float(key: str) -> float | None:
+  try:
+    value = _params.get(key, return_default=True)
+    return None if value is None else float(value)
+  except (UnknownKeyName, TypeError, ValueError):
+    return None
+
+
 def _get_slc_lookahead_speed_factor(key: str, fallback_key: str = "lookaheadSpeedFactor") -> float:
+  param_key = {
+    "lookaheadSpeedFactorUp": "SpeedLimitLookaheadFactorUp",
+    "lookaheadSpeedFactorDown": "SpeedLimitLookaheadFactorDown",
+  }[key]
+  param_value = _get_param_float(param_key)
+  if param_value is not None:
+    return _clip_float(param_value, LOOKAHEAD_SPEED_FACTOR_MIN, LOOKAHEAD_SPEED_FACTOR_MAX, LOOKAHEAD_SPEED_FACTOR_MIN)
+
   config = _read_config()
   value = config.get(key, config.get(fallback_key))
   return _clip_float(value, LOOKAHEAD_SPEED_FACTOR_MIN, LOOKAHEAD_SPEED_FACTOR_MAX, LOOKAHEAD_SPEED_FACTOR_MIN)
@@ -55,4 +74,14 @@ def get_slc_lookahead_speed_factor_down() -> float:
 
 
 def get_slc_lookahead_lower_limits() -> bool:
-  return bool(_read_config().get("lookaheadLowerLimits", False))
+  try:
+    return bool(_params.get("SpeedLimitLookaheadLowerLimits", return_default=True))
+  except UnknownKeyName:
+    return bool(_read_config().get("lookaheadLowerLimits", False))
+
+
+def get_slc_no_brake() -> bool:
+  try:
+    return bool(_params.get("SpeedLimitNoBrake", return_default=True))
+  except UnknownKeyName:
+    return bool(_read_config().get("noBrakeForSpeedLimit", False))

@@ -947,6 +947,38 @@
                       "value": 0
                     }
                   ]
+                },
+                {
+                  "key": "SpeedLimitLookaheadFactorUp",
+                  "widget": "option",
+                  "title": "Lookahead Higher Limits",
+                  "description": "Applies higher upcoming map speed limits early. The distance is upcoming speed limit x this factor.",
+                  "min": 0,
+                  "max": 10,
+                  "step": 0.25,
+                  "unit": "x"
+                },
+                {
+                  "key": "SpeedLimitLookaheadFactorDown",
+                  "widget": "option",
+                  "title": "Lookahead Lower Limits",
+                  "description": "Applies lower upcoming map speed limits early. The distance is current speed limit x this factor.",
+                  "min": 0,
+                  "max": 10,
+                  "step": 0.25,
+                  "unit": "x"
+                },
+                {
+                  "key": "SpeedLimitLookaheadLowerLimits",
+                  "widget": "toggle",
+                  "title": "Use Lookahead for Lower Limits",
+                  "description": "Allows lower upcoming speed limits to be applied before reaching the sign."
+                },
+                {
+                  "key": "SpeedLimitNoBrake",
+                  "widget": "toggle",
+                  "title": "Coast for Lower Limits",
+                  "description": "When slowing for an upcoming speed limit, requests a light coast-style deceleration instead of active speed-limit braking during lookahead."
                 }
               ]
             }

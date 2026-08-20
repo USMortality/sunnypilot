@@ -14,7 +14,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode 
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import OffsetType as SpeedLimitOffsetType
 from openpilot.system.ui.lib.multilang import tr
 from openpilot.system.ui.sunnypilot.widgets import get_highlighted_description
-from openpilot.system.ui.sunnypilot.widgets.list_view import multiple_button_item_sp, option_item_sp, simple_button_item_sp, LineSeparatorSP
+from openpilot.system.ui.sunnypilot.widgets.list_view import multiple_button_item_sp, option_item_sp, simple_button_item_sp, toggle_item_sp, LineSeparatorSP
 from openpilot.system.ui.widgets import Widget
 from openpilot.system.ui.widgets.network import NavButton
 from openpilot.system.ui.widgets.scroller_tici import Scroller
@@ -34,6 +34,13 @@ SPEED_LIMIT_OFFSET_DESCRIPTIONS = [
   tr("Fixed: Adds a fixed offset [Speed Limit + Offset]"),
   tr("Percent: Adds a percent offset [Speed Limit + (Offset % Speed Limit)]"),
 ]
+
+SPEED_LIMIT_LOOKAHEAD_UP_DESCRIPTION = tr("Applies higher upcoming map speed limits early. The distance is upcoming speed limit x this factor.")
+SPEED_LIMIT_LOOKAHEAD_DOWN_DESCRIPTION = tr("Applies lower upcoming map speed limits early. The distance is current speed limit x this factor.")
+SPEED_LIMIT_LOOKAHEAD_LOWER_DESCRIPTION = tr("Allows lower upcoming speed limits to be applied before reaching the sign.")
+SPEED_LIMIT_NO_BRAKE_DESCRIPTION = tr(
+  "When slowing for an upcoming speed limit, requests a light coast-style deceleration instead of active speed-limit braking during lookahead."
+)
 
 
 class PanelType(IntEnum):
@@ -86,13 +93,54 @@ class SpeedLimitSettingsLayout(Widget):
       label_callback=self._get_offset_label,
     )
 
+    self._lookahead_factor_up = option_item_sp(
+      title=lambda: tr("Lookahead Higher Limits"),
+      param="SpeedLimitLookaheadFactorUp",
+      min_value=0,
+      max_value=1000,
+      value_change_step=25,
+      description=SPEED_LIMIT_LOOKAHEAD_UP_DESCRIPTION,
+      use_float_scaling=True,
+      label_callback=self._get_factor_label,
+    )
+
+    self._lookahead_factor_down = option_item_sp(
+      title=lambda: tr("Lookahead Lower Limits"),
+      param="SpeedLimitLookaheadFactorDown",
+      min_value=0,
+      max_value=1000,
+      value_change_step=25,
+      description=SPEED_LIMIT_LOOKAHEAD_DOWN_DESCRIPTION,
+      use_float_scaling=True,
+      label_callback=self._get_factor_label,
+    )
+
+    self._lookahead_lower_limits = toggle_item_sp(
+      title=lambda: tr("Use Lookahead for Lower Limits"),
+      description=SPEED_LIMIT_LOOKAHEAD_LOWER_DESCRIPTION,
+      initial_state=ui_state.params.get_bool("SpeedLimitLookaheadLowerLimits"),
+      param="SpeedLimitLookaheadLowerLimits",
+    )
+
+    self._speed_limit_no_brake = toggle_item_sp(
+      title=lambda: tr("Coast for Lower Limits"),
+      description=SPEED_LIMIT_NO_BRAKE_DESCRIPTION,
+      initial_state=ui_state.params.get_bool("SpeedLimitNoBrake"),
+      param="SpeedLimitNoBrake",
+    )
+
     items = [
       self._speed_limit_mode,
       LineSeparatorSP(40),
       self._source_button,
       LineSeparatorSP(40),
       self._speed_limit_offset_type,
-      self._speed_limit_value_offset
+      self._speed_limit_value_offset,
+      LineSeparatorSP(40),
+      self._lookahead_factor_up,
+      self._lookahead_factor_down,
+      self._lookahead_lower_limits,
+      self._speed_limit_no_brake,
     ]
     return items
 
@@ -119,6 +167,10 @@ class SpeedLimitSettingsLayout(Widget):
     elif offset_type == int(SpeedLimitOffsetType.fixed):
       return f"{value} {unit}"
     return str(value)
+
+  @staticmethod
+  def _get_factor_label(value):
+    return tr("Off") if value == 0 else f"{value / 100.0:.2f}x"
 
   def _update_state(self):
     super()._update_state()
