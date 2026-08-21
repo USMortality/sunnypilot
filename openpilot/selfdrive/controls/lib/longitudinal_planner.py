@@ -17,9 +17,12 @@ from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
 
-A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
-A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
-J_CRUISE_VALS = [1.6, 1.2, 0.8, 0.6]
+# v_ego speed lookup table in m/s: 0, 10, 36, 90, 144 kph.
+A_CRUISE_MAX_BP = [0., 2.8, 10.0, 25., 40.]
+# Max target acceleration in m/s^2 at the speeds above.
+A_CRUISE_MAX_VALS = [1.2, 1.0, 0.65, 0.45, 0.35]
+# Max target acceleration change rate at the speeds above.
+J_CRUISE_VALS = [1.0, 0.95, 0.65, 0.4, 0.3]
 A_CRUISE_MIN = -1.2
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
