@@ -10,6 +10,13 @@ from openpilot.selfdrive.ui.layouts.settings.common import restart_needed_callba
 from openpilot.selfdrive.ui.ui_state import ui_state
 
 PERSONALITY_TO_INT = log.LongitudinalPersonality.schema.enumerants
+LONGITUDINAL_PERSONALITY_ORDER = (
+  int(log.LongitudinalPersonality.aggressive),
+  int(log.LongitudinalPersonality.moderate),
+  int(log.LongitudinalPersonality.standard),
+  int(log.LongitudinalPersonality.relaxed),
+)
+LONGITUDINAL_PERSONALITY_TO_BUTTON = {personality: index for index, personality in enumerate(LONGITUDINAL_PERSONALITY_ORDER)}
 
 
 class ExperimentalModeConfirmPage(NavScroller):
@@ -41,7 +48,12 @@ class TogglesLayoutMici(NavScroller):
   def __init__(self):
     super().__init__()
 
-    self._personality_toggle = BigMultiParamToggle("driving personality", "LongitudinalPersonality", ["aggressive", "standard", "relaxed"])
+    self._personality_toggle = BigMultiParamToggle(
+      "driving personality",
+      "LongitudinalPersonality",
+      ["aggressive", "moderate", "standard", "relaxed"],
+      param_values=list(LONGITUDINAL_PERSONALITY_ORDER),
+    )
     self._experimental_btn = BigToggle("experimental mode", initial_state=ui_state.params.get_bool("ExperimentalMode"),
                                        toggle_callback=self._on_experimental_mode)
     is_metric_toggle = BigParamControl("use metric units", "IsMetric")
@@ -89,7 +101,7 @@ class TogglesLayoutMici(NavScroller):
     if ui_state.sm.updated["selfdriveState"]:
       personality = PERSONALITY_TO_INT[ui_state.sm["selfdriveState"].personality]
       if personality != ui_state.personality and ui_state.started:
-        self._personality_toggle.set_value(self._personality_toggle._options[personality])
+        self._personality_toggle.set_value(self._personality_toggle._options[LONGITUDINAL_PERSONALITY_TO_BUTTON[personality]])
       ui_state.personality = personality
 
   def show_event(self):
