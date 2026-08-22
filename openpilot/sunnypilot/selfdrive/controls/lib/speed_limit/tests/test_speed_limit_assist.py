@@ -18,7 +18,7 @@ from opendbc.car.toyota.values import CAR as TOYOTA
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_MDL
-from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
+from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD
 from openpilot.sunnypilot.selfdrive.car import interfaces as sunnypilot_interfaces
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import PCM_LONG_REQUIRED_MAX_SET_SPEED
@@ -147,6 +147,21 @@ class TestSpeedLimitAssist(OpenpilotTestCase):
     assert self.sla.state == SpeedLimitAssistState.active
     assert self.sla.is_enabled and self.sla.is_active
     assert self.sla.output_v_target == SPEED_LIMITS['highway']
+
+  def test_unlimited_speed_limit_confirms_at_cruise_max(self):
+    self.sla.pcm_op_long = False
+    self.sla.is_metric = True
+    self.sla.state = SpeedLimitAssistState.preActive
+
+    unlimited_speed_limit = 253 * CV.KPH_TO_MS
+    cruise_max = V_CRUISE_MAX * CV.KPH_TO_MS
+
+    self.sla.update(True, False, SPEED_LIMITS['highway'], 0, cruise_max, unlimited_speed_limit,
+                    unlimited_speed_limit, True, 0, self.events_sp)
+
+    assert self.sla.state == SpeedLimitAssistState.active
+    assert self.sla.target_set_speed_conv == V_CRUISE_MAX
+    assert self.sla.output_v_target == cruise_max
 
   def test_preactive_timeout_to_inactive(self):
     self.sla.state = SpeedLimitAssistState.preActive

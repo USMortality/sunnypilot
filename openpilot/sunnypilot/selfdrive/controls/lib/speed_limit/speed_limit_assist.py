@@ -16,7 +16,7 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import PCM_LONG_REQUIRED_MAX_SET_SPEED, CONFIRM_SPEED_THRESHOLD, \
-  CONFIRM_SPEED_DROP_PERCENTAGE
+  CONFIRM_SPEED_DROP_PERCENTAGE, UNLIMITED_SPEED_LIMIT_THRESHOLD_KPH
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.helpers import compare_cluster_target, set_speed_limit_assist_availability
 
@@ -84,6 +84,8 @@ class SpeedLimitAssist:
     self._speed_limit_final_last = 0.
     self.speed_limit_prev = 0.
     self.speed_limit_final_last_conv = 0
+    self.speed_limit_control_target = 0.
+    self.speed_limit_control_target_conv = 0
     self.prev_speed_limit_final_last_conv = 0
     self._distance = 0.
     self.state = SpeedLimitAssistState.disabled
@@ -118,6 +120,15 @@ class SpeedLimitAssist:
     return bool(self.v_cruise_cluster_conv == self.target_set_speed_conv)
 
   @property
+  def unlimited_speed_limit_threshold_conv(self) -> int:
+    threshold_kph = UNLIMITED_SPEED_LIMIT_THRESHOLD_KPH
+    return round(threshold_kph if self.is_metric else threshold_kph * CV.KPH_TO_MPH)
+
+  @property
+  def speed_limit_unlimited(self) -> bool:
+    return bool(self.speed_limit_final_last_conv >= self.unlimited_speed_limit_threshold_conv)
+
+  @property
   def v_cruise_cluster_below_confirm_speed_threshold(self) -> bool:
     return bool(self.v_cruise_cluster_conv < CONFIRM_SPEED_THRESHOLD[self.is_metric])
 
@@ -130,9 +141,9 @@ class SpeedLimitAssist:
   def get_v_target_from_control(self) -> float:
     if self._has_speed_limit:
       if self.pcm_op_long and self.is_enabled:
-        return self._speed_limit_final_last
+        return self.speed_limit_control_target
       if not self.pcm_op_long and self.is_active:
-        return self._speed_limit_final_last
+        return self.speed_limit_control_target
 
     # Fallback
     return V_CRUISE_UNSET
@@ -175,13 +186,17 @@ class SpeedLimitAssist:
     return False
 
   def update_calculations(self, v_cruise_cluster: float) -> None:
+    from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
+
     speed_conv = CV.MS_TO_KPH if self.is_metric else CV.MS_TO_MPH
     self.v_cruise_cluster = v_cruise_cluster
 
-    # Update current velocity offset (error)
-    self.v_offset = self._speed_limit_final_last - self.v_ego
+    # Treat unrestricted or above-cruise-max limits as the highest reachable set speed for control/state matching.
+    self.speed_limit_control_target = min(self._speed_limit_final_last, V_CRUISE_MAX * CV.KPH_TO_MS)
+    self.v_offset = self.speed_limit_control_target - self.v_ego
 
     self.speed_limit_final_last_conv = round(self._speed_limit_final_last * speed_conv)
+    self.speed_limit_control_target_conv = round(self.speed_limit_control_target * speed_conv)
     self.v_cruise_cluster_conv = round(self.v_cruise_cluster * speed_conv)
 
     cst_low, cst_high = PCM_LONG_REQUIRED_MAX_SET_SPEED[self.is_metric]
@@ -189,7 +204,7 @@ class SpeedLimitAssist:
                             cst_high
     pcm_long_required_max_set_speed_conv = round(pcm_long_required_max * speed_conv)
 
-    self.target_set_speed_conv = pcm_long_required_max_set_speed_conv if self.pcm_op_long else self.speed_limit_final_last_conv
+    self.target_set_speed_conv = pcm_long_required_max_set_speed_conv if self.pcm_op_long else self.speed_limit_control_target_conv
 
   @property
   def apply_confirm_speed_threshold(self) -> bool:
@@ -232,7 +247,7 @@ class SpeedLimitAssist:
     if self.state != SpeedLimitAssistState.preActive:
       return False
 
-    req_plus, req_minus = compare_cluster_target(self.v_cruise_cluster, self._speed_limit_final_last, self.is_metric)
+    req_plus, req_minus = compare_cluster_target(self.v_cruise_cluster, self.speed_limit_control_target, self.is_metric)
 
     return self._get_button_release(req_plus, req_minus)
 

@@ -11,8 +11,10 @@ import pyray as rl
 
 from openpilot.cereal import custom
 from openpilot.common.constants import CV
+from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
 from openpilot.selfdrive.ui.onroad.hud_renderer import UI_CONFIG
 from openpilot.selfdrive.ui.ui_state import ui_state
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import UNLIMITED_SPEED_LIMIT_THRESHOLD_KPH
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode as SpeedLimitMode
 from openpilot.common.hardware import HARDWARE
 from openpilot.system.ui.lib.application import gui_app, FontWeight
@@ -81,6 +83,10 @@ class SpeedLimitAlertRenderer:
 
       set_speed_round = round(set_speed)
       speed_limit_round = round(speed_limit_final_last * speed_conv)
+      unlimited_speed_limit_threshold_round = round(UNLIMITED_SPEED_LIMIT_THRESHOLD_KPH if ui_state.is_metric else
+                                                    UNLIMITED_SPEED_LIMIT_THRESHOLD_KPH * CV.KPH_TO_MPH)
+      if speed_limit_round >= unlimited_speed_limit_threshold_round:
+        speed_limit_round = round(V_CRUISE_MAX if ui_state.is_metric else V_CRUISE_MAX * CV.KPH_TO_MPH)
 
       if set_speed_round < speed_limit_round:
         txt_icon = self.arrow_up
@@ -200,24 +206,30 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
   def _draw_sign_main(self, rect, alpha=1.0):
     speed_limit_warning_enabled = ui_state.speed_limit_mode is not None and ui_state.speed_limit_mode >= SpeedLimitMode.warning
     has_limit = self.speed_limit_valid or self.speed_limit_last_valid
-    is_overspeed = has_limit and round(self.speed_limit_final_last) < round(self.speed)
+    is_unlimited = has_limit and self._is_unlimited(self.speed_limit_last)
+    is_overspeed = has_limit and not is_unlimited and round(self.speed_limit_final_last) < round(self.speed)
 
-    limit_str = str(round(self.speed_limit_last)) if has_limit else "---"
+    limit_str = "" if is_unlimited else str(round(self.speed_limit_last)) if has_limit else "---"
     sub_text = ""
-    if self.speed_limit_offset != 0:
+    if self.speed_limit_offset != 0 and not is_unlimited:
       sign = "" if self.speed_limit_offset > 0 else "-"
       sub_text = f"{sign}{round(abs(self.speed_limit_offset))}"
 
     txt_color = Colors.BLACK
     if speed_limit_warning_enabled and is_overspeed:
       txt_color = Colors.RED
-    elif not self.speed_limit_valid:
+    elif is_unlimited or not self.speed_limit_valid:
       txt_color = Colors.GREY
 
     if ui_state.is_metric:
-      self._render_vienna(rect, limit_str, sub_text, txt_color, has_limit, alpha)
+      self._render_vienna(rect, limit_str, sub_text, txt_color, has_limit, alpha, is_unlimited)
     else:
-      self._render_mutcd(rect, limit_str, sub_text, txt_color, has_limit, alpha)
+      self._render_mutcd(rect, limit_str, sub_text, txt_color, has_limit, alpha, is_unlimited)
+
+  @staticmethod
+  def _is_unlimited(speed_limit: float) -> bool:
+    threshold = UNLIMITED_SPEED_LIMIT_THRESHOLD_KPH if ui_state.is_metric else UNLIMITED_SPEED_LIMIT_THRESHOLD_KPH * CV.KPH_TO_MPH
+    return speed_limit >= threshold
 
   def _draw_pre_active_arrow(self, sign_rect):
     _, txt_icon, icon_alpha, _, _ = SpeedLimitAlertRenderer.speed_limit_pre_active_icon_helper(self)
@@ -229,12 +241,12 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
       color = rl.Color(255, 255, 255, int(icon_alpha))
       rl.draw_texture_ex(txt_icon, rl.Vector2(arrow_x, arrow_y), 0.0, 1.0, color)
 
-  def _render_vienna(self, rect, val, sub, color, has_limit, alpha=1.0):
+  def _render_vienna(self, rect, val, sub, color, has_limit, alpha=1.0, is_unlimited=False):
     center = rl.Vector2(rect.x + rect.width / 2, rect.y + rect.height / 2)
     radius = (rect.width + 18) / 2
 
     white = rl.color_alpha(Colors.WHITE, alpha)
-    red = rl.color_alpha(Colors.RED, alpha)
+    red = rl.color_alpha(Colors.GREY if is_unlimited else Colors.RED, alpha)
     black = rl.color_alpha(Colors.BLACK, alpha)
     dark_grey = rl.color_alpha(Colors.DARK_GREY, alpha)
     text_color = rl.color_alpha(color, alpha)
@@ -242,8 +254,18 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
     rl.draw_circle_v(center, radius, white)
     rl.draw_ring(center, radius * 0.75, radius, 0, 360, 36, red)
 
-    font_size = 70 if len(val) >= 3 else 85
-    self._draw_text_centered(self.font_bold, val, font_size, center, text_color)
+    if is_unlimited:
+      line_color = rl.color_alpha(Colors.GREY, alpha)
+      line_len = radius * 0.9
+      line_gap = radius * 0.2
+      line_thickness = max(6.0, radius * 0.09)
+      for offset in (-line_gap, line_gap):
+        start = rl.Vector2(center.x - line_len / 2 + offset, center.y + line_len / 2)
+        end = rl.Vector2(center.x + line_len / 2 + offset, center.y - line_len / 2)
+        rl.draw_line_ex(start, end, line_thickness, line_color)
+    else:
+      font_size = 70 if len(val) >= 3 else 85
+      self._draw_text_centered(self.font_bold, val, font_size, center, text_color)
 
     if sub and has_limit:
       s_radius = radius * 0.4
@@ -255,7 +277,7 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
       font_scale = 0.5 if len(sub) < 3 else 0.45
       self._draw_text_centered(self.font_bold, sub, int(s_radius * 2 * font_scale), s_center, white)
 
-  def _render_mutcd(self, rect, val, sub, color, has_limit, alpha=1.0):
+  def _render_mutcd(self, rect, val, sub, color, has_limit, alpha=1.0, is_unlimited=False):
     white = rl.color_alpha(Colors.WHITE, alpha)
     black = rl.color_alpha(Colors.BLACK, alpha)
     dark_grey = rl.color_alpha(Colors.DARK_GREY, alpha)
@@ -272,7 +294,8 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
 
     self._draw_text_centered(self.font_demi, "SPEED", 40, rl.Vector2(rect.x + rect.width / 2, rect.y + 40), black)
     self._draw_text_centered(self.font_demi, "LIMIT", 40, rl.Vector2(rect.x + rect.width / 2, rect.y + 80), black)
-    self._draw_text_centered(self.font_bold, val, 90, rl.Vector2(rect.x + rect.width / 2, rect.y + 150), text_color)
+    self._draw_text_centered(self.font_bold, "END" if is_unlimited else val, 72 if is_unlimited else 90,
+                             rl.Vector2(rect.x + rect.width / 2, rect.y + 150), text_color)
 
     if sub and has_limit:
       box_sz = rect.width * 0.3
@@ -297,8 +320,9 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
     rl.draw_rectangle_rounded_lines_ex(rect, 0.35, 10, 3, Colors.MUTCD_LINES)
 
     mid_x = rect.x + rect.width / 2
+    ahead_text = "//" if self._is_unlimited(self.speed_limit_ahead) else str(round(self.speed_limit_ahead))
     self._draw_text_centered(self.font_demi, "AHEAD", 40, rl.Vector2(mid_x, rect.y + 28), Colors.GREY)
-    self._draw_text_centered(self.font_bold, str(round(self.speed_limit_ahead)), 70, rl.Vector2(mid_x, rect.y + 82), Colors.WHITE)
+    self._draw_text_centered(self.font_bold, ahead_text, 70, rl.Vector2(mid_x, rect.y + 82), Colors.WHITE)
     self._draw_text_centered(self.font_norm, self._format_dist(self.speed_limit_ahead_dist), 36, rl.Vector2(mid_x, rect.y + 134), Colors.GREY)
 
   @staticmethod

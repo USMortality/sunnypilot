@@ -20,3 +20,6 @@ CONFIRM_SPEED_THRESHOLD = {
 
 # Require confirmation for unusually large speed-limit drops, which are often bad map data.
 CONFIRM_SPEED_DROP_PERCENTAGE = 45
+
+# Map providers can encode unrestricted roads as a very high "speed limit" (Germany commonly appears as 253 kph).
+UNLIMITED_SPEED_LIMIT_THRESHOLD_KPH = 250.
