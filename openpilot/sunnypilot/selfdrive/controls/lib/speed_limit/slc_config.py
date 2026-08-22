@@ -56,3 +56,7 @@ def get_slc_lookahead_speed_factor_down() -> float:
 
 def get_slc_lookahead_lower_limits() -> bool:
   return bool(_read_config().get("lookaheadLowerLimits", False))
+
+
+def get_slc_no_brake() -> bool:
+  return bool(_read_config().get("noBrakeForSpeedLimit", False))

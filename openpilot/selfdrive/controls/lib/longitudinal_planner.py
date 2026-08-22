@@ -15,7 +15,8 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
-from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP, speed_limit_no_brake_active
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.slc_config import get_slc_no_brake
 
 A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
 A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
@@ -24,6 +25,7 @@ A_CRUISE_MIN = -1.2
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
+SLC_NO_BRAKE_ACCEL = -0.3
 
 # Lookup table for turns
 _A_TOTAL_MAX_V = [1.7, 3.2]
@@ -34,6 +36,9 @@ def get_max_accel(v_ego):
 
 def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
+
+def get_no_throttle_accel():
+  return float(np.clip(SLC_NO_BRAKE_ACCEL, ACCEL_MIN, 0.0))
 
 def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, accel_coast, allow_throttle):
   max_accel = ACCEL_MAX if e2e else get_max_accel(v_ego)
@@ -63,6 +68,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.fcw = False
     self.dt = dt
     self.allow_throttle = True
+    self.speed_limit_no_brake = get_slc_no_brake()
 
     self.v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
     self.a_cruise = init_a
@@ -80,6 +86,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       accel_coast = get_coast_accel(sm['carControl'].orientationNED[1])
     else:
       accel_coast = ACCEL_MAX
+    no_throttle_accel = get_no_throttle_accel()
 
     v_ego = sm['carState'].vEgo
     v_cruise_kph = min(sm['carState'].vCruise, V_CRUISE_MAX)
@@ -114,6 +121,10 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     # Get new v_cruise and a_target from Smart Cruise Control and Speed Limit Assist
     v_cruise, self.output_a_target = LongitudinalPlannerSP.update_targets(self, sm, self.v_desired_filter.x, self.output_a_target, v_cruise)
+    no_brake_for_speed_limit = speed_limit_no_brake_active(self.speed_limit_no_brake, self.resolver.lower_lookahead_active,
+                                                           sm['radarState'].leadOne.present)
+    if no_brake_for_speed_limit:
+      self.output_a_target = no_throttle_accel
 
     self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.output_a_target)
@@ -140,9 +151,12 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     is_e2e = self.is_e2e(sm)
 
-    self.a_cruise = get_cruise_accel(is_e2e, v_cruise, v_ego,
-                                     self.a_cruise, steer_angle_without_offset, self.CP, self.dt,
-                                     accel_coast, self.allow_throttle)
+    if no_brake_for_speed_limit:
+      self.a_cruise = no_throttle_accel
+    else:
+      self.a_cruise = get_cruise_accel(is_e2e, v_cruise, v_ego,
+                                       self.a_cruise, steer_angle_without_offset, self.CP, self.dt,
+                                       accel_coast, self.allow_throttle)
     cruise_should_stop = should_stop(v_ego, self.a_cruise)
 
     candidates = [(output_a_target_mpc, self.mpc.source, output_should_stop_mpc),

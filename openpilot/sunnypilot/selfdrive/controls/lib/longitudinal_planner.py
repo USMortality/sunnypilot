@@ -21,6 +21,10 @@ DecState = custom.LongitudinalPlanSP.DynamicExperimentalControl.DynamicExperimen
 LongitudinalPlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
 
 
+def speed_limit_no_brake_active(enabled: bool, lower_lookahead_active: bool, has_lead: bool) -> bool:
+  return enabled and lower_lookahead_active and not has_lead
+
+
 class LongitudinalPlannerSP:
   def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP, mpc):
     self.events_sp = EventsSP()
