@@ -182,6 +182,18 @@ class SpeedLimitResolver:
   def _get_source_solution_according_to_policy(self) -> custom.LongitudinalPlanSP.SpeedLimit.Source:
     sources_for_policy = self._policy_to_sources_map[Policy(self.policy)]
 
+    if Policy(self.policy) == Policy.car_state_priority:
+      car_limit = self.limit_solutions[SpeedLimitSource.car]
+      map_limit = self.limit_solutions[SpeedLimitSource.map]
+      map_distance = self.distance_solutions[SpeedLimitSource.map]
+
+      if car_limit > 0.:
+        if map_distance > 0. and map_limit > 0.:
+          return SpeedLimitSource.map
+        return SpeedLimitSource.car
+
+      return SpeedLimitSource.map if map_limit > 0. else SpeedLimitSource.none
+
     if Policy(self.policy) != Policy.combined:
       # They are ordered in the order of preference, so we pick the first that's non-zero
       for source in sources_for_policy:
