@@ -9,6 +9,12 @@ class IdleMessages(dict):
   def all_checks(self, services):
     return all(self.healthy.get(service, True) for service in services)
 
+  def all_alive(self, services):
+    return all(self.healthy.get(service, True) for service in services)
+
+  def all_valid(self, services):
+    return all(self.healthy.get(service, True) for service in services)
+
 
 @pytest.fixture
 def idle_messages():
@@ -234,6 +240,10 @@ def rocket_fuel(monkeypatch):
   # Import the real indicator without starting the global UI application.
   with monkeypatch.context() as imports:
     imports.setitem(sys.modules, 'openpilot.selfdrive.ui.ui_state', NS(ui_state=NS()))
+    imports.setitem(sys.modules, 'openpilot.system.ui.lib.application',
+                    NS(gui_app=NS(font=lambda weight: None), FontWeight=NS(BOLD='bold')))
+    imports.setitem(sys.modules, 'openpilot.system.ui.lib.text_measure',
+                    NS(measure_text_cached=lambda *args: NS(x=30., y=48.)))
     path = Path(__file__).resolve().parents[5] / 'selfdrive/ui/sunnypilot/onroad/rocket_fuel.py'
     spec = importlib.util.spec_from_file_location('rocket_fuel_idle_test', path)
     module = importlib.util.module_from_spec(spec)
@@ -258,6 +268,38 @@ def test_n_indicator_rejects_stale_controls_request(rocket_fuel, idle_messages, 
   idle_messages['carControl'] = NS(longActive=True)
   idle_messages.healthy[service] = False
   assert not rocket_fuel.longitudinal_idle_active(idle_messages)
+
+
+def test_n_indicator_accepts_fresh_requests_at_20_fps(rocket_fuel, idle_messages):
+  from openpilot.cereal.messaging import FrequencyTracker
+  tracker = FrequencyTracker(service_freq=100., update_freq=100., is_poll=False)
+  for i in range(1, 41):
+    tracker.record_recv_time(i / 20.)
+  assert not tracker.valid
+  idle_messages['carControlSP'] = NS(longitudinalIdle=True)
+  idle_messages['carControl'] = NS(longActive=True)
+  idle_messages.all_checks = lambda services: tracker.valid
+  assert rocket_fuel.longitudinal_idle_active(idle_messages)
+
+
+def test_n_indicator_draws_with_application_font(rocket_fuel, idle_messages, monkeypatch):
+  from unittest.mock import Mock
+  render_globals = rocket_fuel.render.__globals__
+  rl = render_globals['rl']
+  font = object()
+  monkeypatch.setattr(render_globals['gui_app'], 'font', Mock(return_value=font))
+  monkeypatch.setattr(render_globals['ui_state'], 'rocket_fuel', True, raising=False)
+  draw = Mock()
+  monkeypatch.setattr(rl, 'draw_text_ex', draw)
+  monkeypatch.setattr(rl, 'draw_rectangle', Mock())
+  idle_messages['carControlSP'] = NS(longitudinalIdle=True)
+  idle_messages['carControl'] = NS(longActive=True)
+  idle_messages['carState'].aEgo = 0.
+  rocket_fuel().render(rl.Rectangle(0., 0., 100., 200.), idle_messages)
+  draw.assert_called_once()
+  assert draw.call_args.args[:2] == (font, 'N')
+  assert draw.call_args.args[2].x == 13.
+  assert draw.call_args.args[2].y == 76.
 
 
 @pytest.fixture
