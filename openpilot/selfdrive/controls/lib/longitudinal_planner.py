@@ -42,7 +42,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.slc_config import (
 # v_ego speed lookup table in m/s: 0, 10, 36, 90, 144 kph.
 A_CRUISE_MAX_BP = [0., 2.8, 10.0, 25., 40.]
 # Max target acceleration in m/s^2 at the speeds above.
-A_CRUISE_MAX_VALS = [1.2, 1.0, 0.65, 0.45, 0.35]
+A_CRUISE_MAX_VALS = [1.2, 1.1, 0.7, 0.45, 0.35]
 # Max target acceleration change rate at the speeds above.
 J_CRUISE_VALS = [1.2, 1.1, 0.8, 0.5, 0.3]
 A_CRUISE_MIN = -1.2
@@ -97,6 +97,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.speed_limit_no_brake = get_slc_no_brake()
     self.longitudinal_idle = False
     self.speed_limit_approach = SpeedLimitApproach()
+    # No lead starts qualified; the first detected lead, invalid inputs, or a
+    # controller reset clears this timer before idle eligibility is evaluated.
     self.coast_lead_stable_time = LEAD_COAST_REENTRY_STABLE_S
     self.coast_lead_present = (False, False)
     self.coast_lead_distances = (None, None)
@@ -195,6 +197,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # A temporary longitudinal override can coincide with a set-speed change.
     # Remember that target while still engaged; the idle safety gates keep N off
     # until the pedal is released and longitudinal control resumes.
+    # Cancel takes priority over arming. Then release even a newly armed target
+    # if already within its gap; the re-entry cooldown is tracked separately.
     if not sm['selfdriveState'].enabled or not v_cruise_initialized or cruise_up_pressed or cruise_target_increased:
       self.no_lead_idle_target = 0.
     elif v_cruise_initialized and (cruise_down_pressed or cruise_target_decreased):
