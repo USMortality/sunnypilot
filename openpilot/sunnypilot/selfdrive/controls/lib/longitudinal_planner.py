@@ -23,6 +23,24 @@ LongitudinalPlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
 SPEED_LIMIT_APPROACH_SHAPE = 1.5
 
 
+class SpeedLimitApproach:
+  """Release once per target; speed noise must never re-arm the override."""
+  def __init__(self):
+    self.target = 0.
+    self.released = False
+
+  def update(self, active: bool, target: float, v_ego: float, release_gap: float, cancel: bool = False) -> bool:
+    if not active or target <= 0.:
+      self.target = 0.
+      self.released = False
+      return False
+    if abs(target - self.target) > 0.1 * CV.KPH_TO_MS:
+      self.target = target
+      self.released = False
+    self.released |= cancel or v_ego <= target + release_gap
+    return not self.released
+
+
 def speed_limit_no_brake_active(enabled: bool, lower_lookahead_active: bool, has_lead: bool) -> bool:
   return enabled and lower_lookahead_active and not has_lead
 

@@ -4,6 +4,7 @@ import numpy as np
 
 import openpilot.cereal.messaging as messaging
 from opendbc.car.structs import car
+from opendbc.sunnypilot.car.hyundai.lead_data_ext import lead_allows_coasting
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.constants import CV
 from openpilot.common.filter_simple import FirstOrderFilter
@@ -18,13 +19,13 @@ from openpilot.common.swaglog import cloudlog
 
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import (
   LongitudinalPlannerSP,
+  SpeedLimitApproach,
   LongitudinalPlanSource as SpeedLimitPlanSource,
   limit_speed_limit_decel_target,
   no_lead_normal_decel_idle_active,
   speed_limit_current_limit_decel_needed,
   speed_limit_idle_active,
   speed_limit_no_brake_accel_target,
-  speed_limit_no_brake_active,
 )
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.slc_config import (
   get_longitudinal_no_lead_idle_min_decel,
@@ -43,7 +44,7 @@ A_CRUISE_MAX_BP = [0., 2.8, 10.0, 25., 40.]
 # Max target acceleration in m/s^2 at the speeds above.
 A_CRUISE_MAX_VALS = [1.2, 1.0, 0.65, 0.45, 0.35]
 # Max target acceleration change rate at the speeds above.
-J_CRUISE_VALS = [1.0, 0.95, 0.65, 0.4, 0.3]
+J_CRUISE_VALS = [1.2, 1.1, 0.8, 0.5, 0.3]
 A_CRUISE_MIN = -1.2
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 ALLOW_THROTTLE_THRESHOLD = 0.4
@@ -94,6 +95,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.allow_throttle = True
     self.speed_limit_no_brake = get_slc_no_brake()
     self.longitudinal_idle = False
+    self.speed_limit_approach = SpeedLimitApproach()
+    self.coast_lead_stable_time = 0.
+    self.coast_lead_distances = (None, None)
     self.longitudinal_idle_block_frames = 0
     self.no_lead_idle_target = 0.
     self.v_cruise_kph_prev = V_CRUISE_UNSET
@@ -162,7 +166,16 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
 
     # Get new v_cruise and a_target from Smart Cruise Control and Speed Limit Assist
     v_cruise, self.output_a_target = LongitudinalPlannerSP.update_targets(self, sm, self.v_desired_filter.x, self.output_a_target, v_cruise)
-    has_lead = sm['radarState'].leadOne.present
+    leads = (sm['radarState'].leadOne, sm['radarState'].leadTwo)
+    has_lead = any(lead.present for lead in leads)
+    lead_coast_safe = sm.all_checks(['radarState']) and all(
+      lead_allows_coasting(lead.present, lead.dRel, lead.vRel, lead.aLeadK, v_ego) and
+      (not lead.present or (previous is not None and lead.dRel >= previous - 0.5))
+      for lead, previous in zip(leads, self.coast_lead_distances, strict=True)
+    )
+    self.coast_lead_distances = tuple(lead.dRel if lead.present else None for lead in leads)
+    self.coast_lead_stable_time = min(self.coast_lead_stable_time + self.dt, 1.) if lead_coast_safe and not reset_state else 0.
+    lead_coast_allowed = lead_coast_safe and (not has_lead or self.coast_lead_stable_time >= 1.)
     no_lead_decel_mode = get_longitudinal_no_lead_decel_mode()
     no_lead_idle_min_decel = get_longitudinal_no_lead_idle_min_decel()
     no_lead_idle_overspeed_margin = get_longitudinal_no_lead_idle_overspeed_margin_kph() * CV.KPH_TO_MS
@@ -177,7 +190,19 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     elif self.no_lead_idle_target > 0. and v_ego <= self.no_lead_idle_target + no_brake_release_gap:
       self.no_lead_idle_target = 0.
     idle_reentry_blocked = self.longitudinal_idle_block_frames > 0
-    no_brake_for_speed_limit = speed_limit_no_brake_active(self.speed_limit_no_brake, self.resolver.lower_lookahead_active, has_lead)
+    speed_limit_source_active = self.source == SpeedLimitPlanSource.speedLimitAssist
+    approach_active = self.speed_limit_approach.update(
+      self.speed_limit_no_brake and self.resolver.lower_lookahead_active,
+      self.resolver.speed_limit_final_last, v_ego, no_brake_release_gap,
+      cancel=reset_state or cruise_up_pressed or cruise_target_increased or sm['carState'].gasPressed,
+    )
+    no_brake_for_speed_limit = approach_active and not idle_reentry_blocked and lead_coast_allowed and not has_lead
+    # Only idle mode may coast behind a steady lead; fixed/dynamic overrides remain no-lead only.
+    if no_brake_mode == "idle":
+      no_brake_for_speed_limit = approach_active and not idle_reentry_blocked and lead_coast_allowed
+    no_brake_for_speed_limit &= (speed_limit_source_active and not reset_state and not sm['controlsState'].forceDecel and not self.is_e2e(sm) and
+                                 not sm['carState'].brakePressed and not sm['carState'].gasPressed and
+                                 sm.all_checks(['modelV2', 'carState']))
     speed_limit_idle = (
       not idle_reentry_blocked and
       no_brake_for_speed_limit and
@@ -243,7 +268,9 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     idle_blocked = self.longitudinal_idle_block_frames > 0
     intentional_no_lead_decel = (
       self.no_lead_idle_target > 0. or
-      (speed_limit_source_active and not speed_limit_current_limit_decel)
+      (speed_limit_source_active and not speed_limit_current_limit_decel and
+       not self.speed_limit_approach.released and
+       v_ego > self.resolver.speed_limit_final_last + no_brake_release_gap)
     )
     normal_decel_idle = (
       not idle_blocked and
@@ -254,7 +281,10 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       not sm['carState'].brakePressed and
       not sm['carState'].gasPressed
     )
-    self.longitudinal_idle = speed_limit_idle or normal_decel_idle
+    idle_safe = (not reset_state and not sm['controlsState'].forceDecel and not self.fcw and not any_should_stop and
+                 not is_e2e and sm.all_checks(['radarState', 'modelV2', 'carState']) and
+                 (not has_lead or (lead_coast_allowed and output_a_target_mpc >= -0.05)))
+    self.longitudinal_idle = idle_safe and (speed_limit_idle or normal_decel_idle)
     if self.longitudinal_idle:
       output_a_target = 0.
     cap_speed_limit_decel = (
