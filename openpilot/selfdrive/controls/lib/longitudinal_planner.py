@@ -51,6 +51,7 @@ ALLOW_THROTTLE_THRESHOLD = 0.4
 MIN_ALLOW_THROTTLE_SPEED = 2.5
 CRUISE_TARGET_CHANGE_MIN_KPH = 0.1
 LONGITUDINAL_IDLE_REENTRY_BLOCK_FRAMES = int(1.0 / DT_MDL)
+LEAD_COAST_REENTRY_STABLE_S = 2.0
 ButtonType = car.CarState.ButtonEvent.Type
 CRUISE_TARGET_DOWN_BUTTONS = (ButtonType.decelCruise, ButtonType.setCruise)
 CRUISE_TARGET_UP_BUTTONS = (ButtonType.accelCruise, ButtonType.resumeCruise)
@@ -96,7 +97,8 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.speed_limit_no_brake = get_slc_no_brake()
     self.longitudinal_idle = False
     self.speed_limit_approach = SpeedLimitApproach()
-    self.coast_lead_stable_time = 0.
+    self.coast_lead_stable_time = LEAD_COAST_REENTRY_STABLE_S
+    self.coast_lead_present = (False, False)
     self.coast_lead_distances = (None, None)
     self.longitudinal_idle_block_frames = 0
     self.no_lead_idle_target = 0.
@@ -167,15 +169,23 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     # Get new v_cruise and a_target from Smart Cruise Control and Speed Limit Assist
     v_cruise, self.output_a_target = LongitudinalPlannerSP.update_targets(self, sm, self.v_desired_filter.x, self.output_a_target, v_cruise)
     leads = (sm['radarState'].leadOne, sm['radarState'].leadTwo)
-    has_lead = any(lead.present for lead in leads)
+    lead_present = tuple(lead.present for lead in leads)
+    has_lead = any(lead_present)
+    lead_presence_changed = lead_present != self.coast_lead_present
+    self.coast_lead_present = lead_present
     lead_coast_safe = sm.all_checks(['radarState']) and all(
       lead_allows_coasting(lead.present, lead.dRel, lead.vRel, lead.aLeadK, v_ego) and
       (not lead.present or (previous is not None and lead.dRel >= previous - 0.5))
       for lead, previous in zip(leads, self.coast_lead_distances, strict=True)
     )
     self.coast_lead_distances = tuple(lead.dRel if lead.present else None for lead in leads)
-    self.coast_lead_stable_time = min(self.coast_lead_stable_time + self.dt, 1.) if lead_coast_safe and not reset_state else 0.
-    lead_coast_allowed = lead_coast_safe and (not has_lead or self.coast_lead_stable_time >= 1.)
+    # A disappearing lead must not bypass the re-entry delay. Presence flicker keeps
+    # normal control active until either lead/no-lead conditions settle.
+    if reset_state or lead_presence_changed or not lead_coast_safe:
+      self.coast_lead_stable_time = 0.
+    else:
+      self.coast_lead_stable_time = min(self.coast_lead_stable_time + self.dt, LEAD_COAST_REENTRY_STABLE_S)
+    lead_coast_allowed = lead_coast_safe and self.coast_lead_stable_time >= LEAD_COAST_REENTRY_STABLE_S
     no_lead_decel_mode = get_longitudinal_no_lead_decel_mode()
     no_lead_idle_min_decel = get_longitudinal_no_lead_idle_min_decel()
     no_lead_idle_overspeed_margin = get_longitudinal_no_lead_idle_overspeed_margin_kph() * CV.KPH_TO_MS
@@ -281,7 +291,12 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       not sm['carState'].brakePressed and
       not sm['carState'].gasPressed
     )
-    idle_safe = (not reset_state and not sm['controlsState'].forceDecel and not self.fcw and not any_should_stop and
+    # Lead-planner braking also restarts qualification, even if the raw lead
+    # passes the distance/speed checks. Never delay the braking request itself.
+    if has_lead and output_a_target_mpc < -0.05:
+      self.coast_lead_stable_time = 0.
+      lead_coast_allowed = False
+    idle_safe = (lead_coast_allowed and not reset_state and not sm['controlsState'].forceDecel and not self.fcw and not any_should_stop and
                  not is_e2e and sm.all_checks(['radarState', 'modelV2', 'carState']) and
                  (not has_lead or (lead_coast_allowed and output_a_target_mpc >= -0.05)))
     self.longitudinal_idle = idle_safe and (speed_limit_idle or normal_decel_idle)
