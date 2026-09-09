@@ -258,3 +258,122 @@ def test_n_indicator_rejects_stale_controls_request(rocket_fuel, idle_messages, 
   idle_messages['carControl'] = NS(longActive=True)
   idle_messages.healthy[service] = False
   assert not rocket_fuel.longitudinal_idle_active(idle_messages)
+
+
+@pytest.fixture
+def manual_cruise_flow(planner_flow, monkeypatch):
+  from openpilot.common.constants import CV
+  from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerSP, LongitudinalPlanSource
+  planner, sm = planner_flow
+  monkeypatch.setattr(LongitudinalPlannerSP, 'update_targets', lambda self, sm, v_ego, a_ego, v_cruise: (v_cruise, a_ego))
+  planner.source = LongitudinalPlanSource.cruise
+  planner.resolver.lower_lookahead_active = False
+  planner.resolver.speed_limit_final_last = 50. * CV.KPH_TO_MS
+  planner.v_cruise_kph_prev = sm['carState'].vCruise = 40.
+  sm['carState'].vEgo = 40. * CV.KPH_TO_MS
+  return planner, sm
+
+
+def test_manual_40_to_20_coasts_without_lead_and_releases(manual_cruise_flow):
+  from openpilot.common.constants import CV
+  planner, sm = manual_cruise_flow
+  sm['carState'].vCruise = 20.
+  for _ in range(10):
+    planner.update(sm)
+  assert planner.longitudinal_idle
+  sm['carState'].vEgo = 25. * CV.KPH_TO_MS
+  planner.update(sm)
+  assert not planner.longitudinal_idle
+  assert planner.output_a_target < 0.
+
+
+def test_manual_40_to_20_coasts_with_qualified_steady_lead(manual_cruise_flow):
+  planner, sm = manual_cruise_flow
+  sm['radarState'].leadOne.present = True
+  for _ in range(45):
+    planner.update(sm)
+  sm['carState'].vCruise = 20.
+  for _ in range(10):
+    planner.update(sm)
+  assert planner.longitudinal_idle
+  planner.mpc.accel = -0.4
+  planner.update(sm)
+  assert not planner.longitudinal_idle
+  assert planner.output_a_target <= -0.4
+
+
+def test_manual_target_drop_during_pedal_override_survives_release(manual_cruise_flow):
+  from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+  planner, sm = manual_cruise_flow
+  sm['controlsState'].longControlState = LongCtrlState.off
+  sm['carState'].gasPressed = True
+  sm['carState'].vCruise = 20.
+  for _ in range(5):
+    planner.update(sm)
+    assert not planner.longitudinal_idle
+  sm['controlsState'].longControlState = LongCtrlState.pid
+  sm['carState'].gasPressed = False
+  for _ in range(45):
+    planner.update(sm)
+  assert planner.longitudinal_idle
+
+
+@pytest.mark.parametrize('field,value', [('vRel', -0.5), ('aLeadK', -0.5), ('dRel', 10.)])
+def test_manual_cruise_idle_rejects_unsafe_lead(manual_cruise_flow, field, value):
+  planner, sm = manual_cruise_flow
+  sm['carState'].vCruise = 20.
+  sm['radarState'].leadOne.present = True
+  setattr(sm['radarState'].leadOne, field, value)
+  for _ in range(45):
+    planner.update(sm)
+  assert not planner.longitudinal_idle
+
+
+@pytest.mark.parametrize('cancel', ['disengage', 'increase'])
+def test_manual_pending_target_is_cleared_by_cancellation(manual_cruise_flow, cancel):
+  from openpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+  planner, sm = manual_cruise_flow
+  sm['controlsState'].longControlState = LongCtrlState.off
+  sm['carState'].vCruise = 20.
+  planner.update(sm)
+  if cancel == 'disengage':
+    sm['selfdriveState'].enabled = False
+  else:
+    sm['carState'].vCruise = 30.
+  planner.update(sm)
+  assert planner.no_lead_idle_target == 0.
+  sm['selfdriveState'].enabled = True
+  sm['controlsState'].longControlState = LongCtrlState.pid
+  for _ in range(45):
+    planner.update(sm)
+  assert not planner.longitudinal_idle
+
+
+def test_manual_idle_does_not_override_curve_speed_control(manual_cruise_flow):
+  from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanSource
+  planner, sm = manual_cruise_flow
+  planner.source = LongitudinalPlanSource.sccMap
+  sm['carState'].vCruise = 20.
+  for _ in range(45):
+    planner.update(sm)
+  assert not planner.longitudinal_idle
+
+
+def test_manual_cruise_idle_request_reaches_can_output(manual_cruise_flow, idle_messages):
+  from opendbc.car.hyundai.hyundaicanfd import create_acc_control
+  from opendbc.sunnypilot.car.hyundai.lead_data_ext import CanFdLeadData
+  planner, sm = manual_cruise_flow
+  sm['carState'].vCruise = 20.
+  for _ in range(10):
+    planner.update(sm)
+  idle_messages['longitudinalPlanSP'].speedLimit.assist.longitudinalIdle = planner.longitudinal_idle
+  idle_messages['longitudinalPlan'].shouldStop = planner.output_should_stop
+  idle_messages['longitudinalPlan'].fcw = planner.fcw
+  accepted_idle = longitudinal_plan_sp_idle_active(idle_messages)
+  assert accepted_idle
+  packer = NS(make_can_msg=lambda name, bus, values: values)
+  tuning = NS(stopping=False, actual_accel=0.1, jerk_lower=1., jerk_upper=1.)
+  values = create_acc_control(packer, NS(ECAN=0), True, 0., 0., False, False, 20., NS(leadDistanceBars=2),
+                              CanFdLeadData(0, 0., 0., False), True, tuning, longitudinal_idle=accepted_idle)
+  assert values['ACCMode'] == 0
+  assert values['aReqRaw'] == 0.

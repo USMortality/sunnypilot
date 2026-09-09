@@ -101,10 +101,10 @@ Default: `-0.5`
 
 `longitudinalNoLeadDecelMode`
 
-Controls intentional no-lead cruise-source decel, outside emergency/lead/stop cases. It does not idle for small speed-hold corrections.
+Controls intentional cruise-source decel, outside emergency, lead-braking, and stop cases. Despite its legacy name, idle mode also permits a qualified steady lead under the rules below. It does not idle for small speed-hold corrections.
 
 This is the broader gas-car test mode. If `"idle"` behaves well, it can replace most fixed/dynamic decel tuning for no-lead slowdowns.
-Pressing accel/resume or increasing the cruise target clears idle and blocks it briefly so the controller sends an active non-idle output again.
+Pressing accel/resume or increasing the cruise target clears idle and blocks it briefly so the controller sends an active non-idle output again. Lowering the set speed while temporarily overriding with the accelerator preserves that slowdown target until control resumes; idle is always blocked while a pedal is pressed, and full disengagement clears the target.
 If SLC is enforcing the current adjusted speed limit and the car is more than `longitudinalNoLeadIdleOverspeedMarginKph` above it, idle is blocked so normal decel/braking can control downhill overspeed. After this happens, idle stays blocked for `longitudinalNoLeadIdleDecelCooldownS` seconds to avoid rapid idle/brake toggling near the limit.
 
 Allowed values:
@@ -158,13 +158,13 @@ Prefer the explicit keys for new configs.
 
 ## Idle with a lead and recovery
 
-The dedicated lower-limit `"idle"` approach can coast with a lead after two seconds of stable readings. Both detected leads must satisfy all of these initial conservative thresholds:
+Both the dedicated lower-limit `"idle"` approach and manual set-speed reductions with `longitudinalNoLeadDecelMode: "idle"` can coast with a lead after two seconds of stable readings. Both detected leads must satisfy all of these initial conservative thresholds:
 
 - Distance at least `6 m + 2 seconds × ego speed`.
 - Relative speed at least `-0.2 m/s` (no appreciable closing).
 - Lead acceleration at least `-0.2 m/s²` (no appreciable slowing).
 - No abrupt distance drop of more than `0.5 m` between planner updates.
 
-Every lead appearance or disappearance restarts the two-second qualification period, including transitions to no lead. Unsafe lead readings or lead-planner braking also restart qualification. During that period, normal control remains active; a flickering lead cannot repeatedly re-enable idle on missing-detection frames. Idle exits immediately when a condition fails or the lead planner requests acceleration below `-0.05 m/s²`. Stop requests, FCW, forced deceleration, pedal input, experimental control, and invalid/stale planner inputs also block idle. Ordinary manual cruise deceleration remains no-lead only. The CAN output rechecks both raw leads without the display's lead-visibility delay.
+Every lead appearance or disappearance restarts the two-second qualification period, including transitions to no lead. Unsafe lead readings or lead-planner braking also restart qualification. During that period, normal control remains active; a flickering lead cannot repeatedly re-enable idle on missing-detection frames. Idle exits immediately when a condition fails or the lead planner requests acceleration below `-0.05 m/s²`. Stop requests, FCW, forced deceleration, pedal input, experimental control, and invalid/stale planner inputs also block idle. Manual cruise deceleration uses the same lead checks and re-entry delay. For example, reducing cruise from `40` to `20 kph` can coast until `22 kph` with a `2 kph` release gap, then normal control finishes the slowdown; a lead that slows or closes the gap blocks idle immediately. The CAN output rechecks both raw leads without the display's lead-visibility delay.
 
 Accel/resume cancels the current lower-limit approach until a new approach/target. The controller continues updating its engagement state during idle, and stale plans cannot keep commanding idle. These checks address software paths that can suppress acceleration; actual Hyundai SCC recovery after `ACCMode=0` still needs validation on supported hardware using recorded CAN/control data.

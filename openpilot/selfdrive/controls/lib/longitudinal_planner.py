@@ -192,13 +192,17 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     no_lead_idle_decel_block_frames = int(get_longitudinal_no_lead_idle_decel_cooldown_s() / DT_MDL)
     no_brake_mode = get_slc_no_brake_mode()
     no_brake_release_gap = get_slc_no_brake_release_gap_kph() * CV.KPH_TO_MS
-    if reset_state or cruise_up_pressed or cruise_target_increased:
+    # A temporary longitudinal override can coincide with a set-speed change.
+    # Remember that target while still engaged; the idle safety gates keep N off
+    # until the pedal is released and longitudinal control resumes.
+    if not sm['selfdriveState'].enabled or not v_cruise_initialized or cruise_up_pressed or cruise_target_increased:
       self.no_lead_idle_target = 0.
-      self.longitudinal_idle_block_frames = LONGITUDINAL_IDLE_REENTRY_BLOCK_FRAMES
     elif v_cruise_initialized and (cruise_down_pressed or cruise_target_decreased):
       self.no_lead_idle_target = v_cruise_raw
-    elif self.no_lead_idle_target > 0. and v_ego <= self.no_lead_idle_target + no_brake_release_gap:
+    if self.no_lead_idle_target > 0. and v_ego <= self.no_lead_idle_target + no_brake_release_gap:
       self.no_lead_idle_target = 0.
+    if reset_state or cruise_up_pressed or cruise_target_increased:
+      self.longitudinal_idle_block_frames = max(self.longitudinal_idle_block_frames, LONGITUDINAL_IDLE_REENTRY_BLOCK_FRAMES)
     idle_reentry_blocked = self.longitudinal_idle_block_frames > 0
     speed_limit_source_active = self.source == SpeedLimitPlanSource.speedLimitAssist
     approach_active = self.speed_limit_approach.update(
@@ -284,8 +288,11 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     )
     normal_decel_idle = (
       not idle_blocked and
-      no_lead_normal_decel_idle_active(no_lead_decel_mode, intentional_no_lead_decel, selected_source == LongitudinalPlanSource.cruise,
-                                       output_a_target, no_lead_idle_min_decel, has_lead, any_should_stop) and
+      no_lead_normal_decel_idle_active(no_lead_decel_mode, intentional_no_lead_decel,
+                                       selected_source == LongitudinalPlanSource.cruise and
+                                       self.source in (SpeedLimitPlanSource.cruise, SpeedLimitPlanSource.speedLimitAssist),
+                                       output_a_target, no_lead_idle_min_decel, has_lead, any_should_stop,
+                                       lead_coast_allowed=lead_coast_allowed) and
       v_ego > MIN_ALLOW_THROTTLE_SPEED and
       not sm['carState'].standstill and
       not sm['carState'].brakePressed and
