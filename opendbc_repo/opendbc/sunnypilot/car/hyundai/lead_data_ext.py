@@ -9,6 +9,12 @@ from opendbc.car import structs
 from opendbc.car.hyundai.values import HyundaiFlags
 
 
+def lead_allows_coasting(present: bool, distance: float, relative_speed: float, acceleration: float, v_ego: float) -> bool:
+  # Require a steady/opening gap and at least two seconds plus standstill space.
+  # Comparisons also reject NaN inputs for present leads.
+  return not present or (distance >= 6. + 2. * max(v_ego, 0.) and relative_speed >= -0.2 and acceleration >= -0.2)
+
+
 class LeadData(ABC):
   def __init__(self, object_gap: int, lead_distance: float, lead_rel_speed: float, lead_visible: bool):
     self.object_gap = object_gap

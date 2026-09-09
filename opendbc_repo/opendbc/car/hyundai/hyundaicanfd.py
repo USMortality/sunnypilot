@@ -125,13 +125,13 @@ def create_lfahda_cluster(packer, CAN, enabled, lfa_icon):
   return packer.make_can_msg("LFAHDA_CLUSTER", CAN.ECAN, values)
 
 
-def longitudinal_idle_allowed(enabled, stopping, gas_override, lead_data: CanFdLeadData):
-  return enabled and not stopping and not gas_override and not lead_data.lead_visible
+def longitudinal_idle_allowed(enabled, stopping, gas_override, lead_data: CanFdLeadData, lead_coast_allowed=False):
+  return enabled and not stopping and not gas_override and (not lead_data.lead_visible or lead_coast_allowed)
 
 
 def create_acc_control(packer, CAN, enabled, accel_last, accel, stopping, gas_override, set_speed, hud_control,
-                       lead_data: CanFdLeadData, main_cruise_enabled, tuning, longitudinal_idle=False):
-  idle_output_allowed = longitudinal_idle_allowed(enabled, stopping, gas_override, lead_data)
+                       lead_data: CanFdLeadData, main_cruise_enabled, tuning, longitudinal_idle=False, lead_coast_allowed=False):
+  idle_output_allowed = longitudinal_idle_allowed(enabled, stopping or tuning.stopping, gas_override, lead_data, lead_coast_allowed)
   longitudinal_idle = longitudinal_idle and idle_output_allowed
   jerk = 5
   jn = jerk / 50
