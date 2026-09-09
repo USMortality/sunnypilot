@@ -15,7 +15,8 @@ def idle_messages():
   sm = IdleMessages(
     longitudinalPlanSP=NS(speedLimit=NS(assist=NS(longitudinalIdle=True))),
     longitudinalPlan=NS(shouldStop=False, fcw=False),
-    controlsState=NS(forceDecel=False),
+    driverMonitoringState=NS(noResponseForceDecel=False),
+    selfdriveState=NS(state="enabled"),
     carState=NS(gasPressed=False, brakePressed=False),
   )
   sm.healthy = {}
@@ -30,7 +31,7 @@ def test_stale_or_invalid_plan_cannot_hold_idle(idle_messages, service):
 
 
 @pytest.mark.parametrize('service,field', [
-  ('longitudinalPlan', 'shouldStop'), ('longitudinalPlan', 'fcw'), ('controlsState', 'forceDecel'),
+  ('longitudinalPlan', 'shouldStop'), ('longitudinalPlan', 'fcw'), ('driverMonitoringState', 'noResponseForceDecel'),
   ('carState', 'gasPressed'), ('carState', 'brakePressed'),
 ])
 def test_idle_yields_to_control_requests(idle_messages, service, field):
@@ -210,3 +211,50 @@ def test_lead_disappearing_after_braking_does_not_bypass_delay(planner_flow):
   for _ in range(15):
     planner.update(sm)
   assert planner.longitudinal_idle
+
+
+def test_idle_check_does_not_require_its_own_controls_state_output(idle_messages):
+  # controlsd publishes controlsState; it is absent from its SubMaster inputs.
+  assert 'controlsState' not in idle_messages
+  assert longitudinal_plan_sp_idle_active(idle_messages)
+
+
+def test_idle_rejected_while_soft_disabling(idle_messages):
+  from openpilot.cereal import log
+  idle_messages['selfdriveState'].state = log.SelfdriveState.OpenpilotState.softDisabling
+  assert not longitudinal_plan_sp_idle_active(idle_messages)
+
+
+@pytest.fixture
+def rocket_fuel(monkeypatch):
+  import importlib.util
+  import sys
+  from pathlib import Path
+
+  # Import the real indicator without starting the global UI application.
+  with monkeypatch.context() as imports:
+    imports.setitem(sys.modules, 'openpilot.selfdrive.ui.ui_state', NS(ui_state=NS()))
+    path = Path(__file__).resolve().parents[5] / 'selfdrive/ui/sunnypilot/onroad/rocket_fuel.py'
+    spec = importlib.util.spec_from_file_location('rocket_fuel_idle_test', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+  return module.RocketFuel
+
+
+def test_n_indicator_requires_accepted_controls_request(rocket_fuel, idle_messages):
+  idle_messages['carControlSP'] = NS(longitudinalIdle=False)
+  idle_messages['carControl'] = NS(longActive=True)
+  # A planner request alone must not light N when controls rejected it.
+  assert not rocket_fuel.longitudinal_idle_active(idle_messages)
+  idle_messages['carControlSP'].longitudinalIdle = True
+  assert rocket_fuel.longitudinal_idle_active(idle_messages)
+  idle_messages['carControl'].longActive = False
+  assert not rocket_fuel.longitudinal_idle_active(idle_messages)
+
+
+@pytest.mark.parametrize('service', ['carControlSP', 'carControl'])
+def test_n_indicator_rejects_stale_controls_request(rocket_fuel, idle_messages, service):
+  idle_messages['carControlSP'] = NS(longitudinalIdle=True)
+  idle_messages['carControl'] = NS(longActive=True)
+  idle_messages.healthy[service] = False
+  assert not rocket_fuel.longitudinal_idle_active(idle_messages)

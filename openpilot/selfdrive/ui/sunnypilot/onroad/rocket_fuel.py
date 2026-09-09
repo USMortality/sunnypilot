@@ -29,9 +29,11 @@ class RocketFuel:
   @staticmethod
   def longitudinal_idle_active(sm) -> bool:
     try:
-      if not RocketFuel.service_alive(sm, 'longitudinalPlanSP'):
+      if not sm.all_checks(['carControlSP', 'carControl']):
         return False
-      return bool(sm['longitudinalPlanSP'].speedLimit.assist.longitudinalIdle)
+      # Display the accepted controls request, not a planner request that may
+      # have been rejected before reaching car control.
+      return bool(sm['carControlSP'].longitudinalIdle and sm['carControl'].longActive)
     except (AttributeError, KeyError):
       return False
 
