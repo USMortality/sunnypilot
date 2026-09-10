@@ -23,7 +23,9 @@ from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.slc_config import (
 SpeedLimitSource = custom.LongitudinalPlanSP.SpeedLimit.Source
 
 ALL_SOURCES = tuple(SpeedLimitSource.schema.enumerants.values())
-SPEED_LIMIT_INCREASE_STABLE_S = 3.0
+MAP_AHEAD_CONFIRMATION_S = 1.5
+MAP_AHEAD_MAX_OBSERVATION_GAP_S = 2.5
+MAP_AHEAD_BOUNDARY_TOLERANCE_M = 15.
 SPEED_LIMIT_EQUAL_TOLERANCE = 0.1 * CV.KPH_TO_MS
 
 
@@ -84,9 +86,7 @@ class SpeedLimitResolver:
     self.speed_limit_offset = 0.
     self.lower_lookahead_active = False
     self._map_lower_lookahead_active = False
-    self._pending_increase = 0.
-    self._pending_increase_since = 0.
-    self._last_valid_source = SpeedLimitSource.none
+    self._reset_map_ahead_candidate()
 
   def _get_lookahead_speed_factor_up(self) -> float:
     return get_slc_lookahead_speed_factor_up()
@@ -150,13 +150,49 @@ class SpeedLimitResolver:
     map_data = sm['liveMapDataSP']
 
     map_data_age = time.monotonic() - sm.logMonoTime['liveMapDataSP'] * 1e-9
-    if map_data_age > LIMIT_MAX_MAP_DATA_AGE:
+    if map_data_age < 0. or map_data_age > LIMIT_MAX_MAP_DATA_AGE:
+      self._reset_map_ahead_candidate()
       return
 
     speed_limit = map_data.speedLimit if map_data.speedLimitValid else 0.
     next_speed_limit = map_data.speedLimitAhead if map_data.speedLimitAheadValid else 0.
 
     self._calculate_map_data_limits(sm, speed_limit, next_speed_limit)
+
+  def _reset_map_ahead_candidate(self) -> None:
+    self._ahead_limit = 0.
+    self._ahead_stamp = 0.
+    self._ahead_since = 0.
+    self._ahead_distance = 0.
+    self._ahead_v_ego = 0.
+    self._ahead_confirmed = False
+
+  def _confirm_map_ahead(self, next_speed_limit: float, distance: float, stamp: float) -> bool:
+    # Qualify before the target enters the configured planning range. Re-reading
+    # one message cannot confirm it. Distance progression approximates boundary
+    # identity because liveMapDataSP does not expose road/boundary IDs.
+    if next_speed_limit <= 0.:
+      self._reset_map_ahead_candidate()
+      return False
+    if stamp == self._ahead_stamp:
+      return self._ahead_confirmed
+
+    elapsed = stamp - self._ahead_stamp
+    expected_distance = max(0., self._ahead_distance - 0.5 * (self._ahead_v_ego + self.v_ego) * elapsed)
+    same_boundary = (0. < elapsed <= MAP_AHEAD_MAX_OBSERVATION_GAP_S and
+                     abs(next_speed_limit - self._ahead_limit) <= SPEED_LIMIT_EQUAL_TOLERANCE and
+                     abs(distance - expected_distance) <= MAP_AHEAD_BOUNDARY_TOLERANCE_M)
+    if not same_boundary:
+      self._ahead_since = stamp
+      self._ahead_confirmed = False
+    elif stamp - self._ahead_since >= MAP_AHEAD_CONFIRMATION_S:
+      self._ahead_confirmed = True
+
+    self._ahead_limit = next_speed_limit
+    self._ahead_stamp = stamp
+    self._ahead_distance = distance
+    self._ahead_v_ego = self.v_ego
+    return self._ahead_confirmed
 
   def _calculate_map_data_limits(self, sm: messaging.SubMaster, speed_limit: float, next_speed_limit: float) -> None:
     map_data = sm['liveMapDataSP']
@@ -166,6 +202,15 @@ class SpeedLimitResolver:
 
     self.limit_solutions[SpeedLimitSource.map] = speed_limit
     self.distance_solutions[SpeedLimitSource.map] = 0.
+
+    confirmed = self._confirm_map_ahead(next_speed_limit, map_data.speedLimitAheadDistance,
+                                        sm.logMonoTime['liveMapDataSP'] * 1e-9)
+    # Do not postpone a late restriction when braking is already needed, or a
+    # boundary is imminent. Current map/car limits never wait for confirmation.
+    adapt_distance = max(0., (self.v_ego ** 2 - next_speed_limit ** 2) / (-2. * LIMIT_ADAPT_ACC))
+    urgent_distance = max(self.v_ego * MAP_AHEAD_CONFIRMATION_S, adapt_distance)
+    if not confirmed and distance_to_speed_limit_ahead > urgent_distance:
+      return
 
     lower_speed_limit_ahead = speed_limit > 0. and 0. < next_speed_limit < speed_limit
     lookahead_distance_down = speed_limit * CV.MS_TO_KPH * self.lookahead_speed_factor_down
@@ -229,30 +274,11 @@ class SpeedLimitResolver:
 
     return speed_limit, distance, source
 
-  def _stabilize_increase(self, speed_limit: float, distance: float,
-                          source: custom.LongitudinalPlanSP.SpeedLimit.Source) -> tuple[float, float, custom.LongitudinalPlanSP.SpeedLimit.Source]:
-    # Apply initial limits and reductions immediately. A higher selected limit
-    # must persist across source/lookahead fluctuations before raising the target.
-    if self.speed_limit_last > 0. and speed_limit > self.speed_limit_last + SPEED_LIMIT_EQUAL_TOLERANCE:
-      now = time.monotonic()
-      if abs(speed_limit - self._pending_increase) > SPEED_LIMIT_EQUAL_TOLERANCE:
-        self._pending_increase = speed_limit
-        self._pending_increase_since = now
-      if now - self._pending_increase_since < SPEED_LIMIT_INCREASE_STABLE_S:
-        # The old lookahead distance no longer describes the selected map entry.
-        # Clear it so a held lower limit cannot authorize idle past the sign.
-        return self.speed_limit_last, 0., self._last_valid_source
-
-    self._pending_increase = 0.
-    if speed_limit > 0.:
-      self._last_valid_source = source
-    return speed_limit, distance, source
-
   def update(self, v_ego: float, sm: messaging.SubMaster) -> None:
     self.v_ego = v_ego
     self.update_params()
 
-    self.speed_limit, self.distance, self.source = self._stabilize_increase(*self._resolve_limit_sources(sm))
+    self.speed_limit, self.distance, self.source = self._resolve_limit_sources(sm)
     self.lower_lookahead_active = self.source == SpeedLimitSource.map and self._map_lower_lookahead_active and self.distance > 0.
     self.speed_limit_offset = self._get_speed_limit_offset()
 
