@@ -293,3 +293,105 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
     assert resolver.source == SpeedLimitSource.car
     assert resolver.speed_limit == 10.
     assert not resolver.lower_lookahead_active
+
+  def test_car_first_map_lookahead_dropout_does_not_raise_target(self, resolver_class, mocker):
+    resolver = resolver_class()
+    mocker.patch.object(resolver, 'update_params')
+    resolver.policy = Policy.car_state_priority
+    resolver.lookahead_lower_limits = True
+    resolver.lookahead_speed_factor_down = 1.
+    sm = setup_sm_mock(mocker)
+    clock = mocker.patch('openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolver.time.monotonic', return_value=100.)
+    sm.logMonoTime['liveMapDataSP'] = int(100e9)
+    sm['carStateSP'].speedLimit = 30.
+    sm['liveMapDataSP'].speedLimit = 30.
+    sm['liveMapDataSP'].speedLimitAhead = 20.
+    sm['liveMapDataSP'].speedLimitAheadValid = True
+    sm['liveMapDataSP'].speedLimitAheadDistance = 100.
+    resolver.update(15., sm)
+    assert resolver.speed_limit == 20.
+    assert resolver.lower_lookahead_active
+
+    sm['liveMapDataSP'].speedLimitAheadValid = False
+    resolver.update(15., sm)
+    assert resolver.speed_limit == 20.
+    assert resolver.distance == 0.
+    assert not resolver.lower_lookahead_active
+    clock.return_value = 102.9
+    resolver.update(15., sm)
+    assert resolver.speed_limit == 20.
+    clock.return_value = 103.1
+    resolver.update(15., sm)
+    assert resolver.speed_limit == 30.
+    assert resolver.source == SpeedLimitSource.car
+
+  def test_dithering_limit_resets_increase_confirmation(self, resolver_class, mocker):
+    resolver = resolver_class()
+    mocker.patch.object(resolver, 'update_params')
+    resolver.policy = Policy.car_state_only
+    sm = setup_sm_mock(mocker)
+    clock = mocker.patch('openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolver.time.monotonic', return_value=100.)
+    for second, limit in [(100., 30.), (101., 20.), (102., 30.), (104., 20.), (105., 30.), (107.9, 30.)]:
+      clock.return_value = second
+      sm['carStateSP'].speedLimit = limit
+      resolver.update(15., sm)
+      assert resolver.speed_limit == (30. if second == 100. else 20.)
+    clock.return_value = 108.1
+    resolver.update(15., sm)
+    assert resolver.speed_limit == 30.
+
+  def test_further_reduction_applies_during_pending_increase(self, resolver_class, mocker):
+    resolver = resolver_class()
+    mocker.patch.object(resolver, 'update_params')
+    resolver.policy = Policy.car_state_only
+    sm = setup_sm_mock(mocker)
+    for limit, expected in [(20., 20.), (30., 20.), (10., 10.)]:
+      sm['carStateSP'].speedLimit = limit
+      resolver.update(15., sm)
+      assert resolver.speed_limit == expected
+      assert resolver.speed_limit_final_last == resolver.speed_limit + resolver.speed_limit_offset
+
+  def test_missing_limits_do_not_bypass_increase_confirmation(self, resolver_class, mocker):
+    resolver = resolver_class()
+    mocker.patch.object(resolver, 'update_params')
+    resolver.policy = Policy.car_state_only
+    sm = setup_sm_mock(mocker)
+    for limit, expected in [(20., 20.), (30., 20.), (0., 0.), (30., 20.)]:
+      sm['carStateSP'].speedLimit = limit
+      resolver.update(15., sm)
+      assert resolver.speed_limit == expected
+      assert resolver.speed_limit_valid == (expected > 0.)
+
+  def test_higher_lookahead_cannot_reuse_held_lower_limit_distance(self, resolver_class, mocker):
+    resolver = resolver_class()
+    mocker.patch.object(resolver, 'update_params')
+    resolver.policy = Policy.map_data_only
+    resolver.lookahead_lower_limits = True
+    resolver.lookahead_speed_factor_down = 2.
+    sm = setup_sm_mock(mocker)
+    sm['liveMapDataSP'].speedLimit = 40.
+    sm['liveMapDataSP'].speedLimitAhead = 20.
+    sm['liveMapDataSP'].speedLimitAheadValid = True
+    sm['liveMapDataSP'].speedLimitAheadDistance = 100.
+    resolver.update(15., sm)
+    assert resolver.lower_lookahead_active
+    sm['liveMapDataSP'].speedLimitAhead = 30.
+    resolver.update(15., sm)
+    assert resolver.speed_limit == 20.
+    assert resolver.distance == 0.
+    assert not resolver.lower_lookahead_active
+
+  def test_changed_increase_restarts_confirmation(self, resolver_class, mocker):
+    resolver = resolver_class()
+    mocker.patch.object(resolver, 'update_params')
+    resolver.policy = Policy.car_state_only
+    sm = setup_sm_mock(mocker)
+    clock = mocker.patch('openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolver.time.monotonic', return_value=100.)
+    for second, limit in [(100., 10.), (101., 20.), (103., 30.), (104.1, 30.)]:
+      clock.return_value = second
+      sm['carStateSP'].speedLimit = limit
+      resolver.update(15., sm)
+      assert resolver.speed_limit == 10.
+    clock.return_value = 106.1
+    resolver.update(15., sm)
+    assert resolver.speed_limit == 30.
