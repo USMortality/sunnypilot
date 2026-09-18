@@ -224,7 +224,8 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         can_sends.extend(hyundaicanfd.create_fca_warning_light(self.packer, self.CAN, self.frame))
       if self.frame % 2 == 0:
         # Recheck raw leads here; display lead visibility has a deliberate delay.
-        lead_coast_allowed = all(lead_allows_coasting(lead.status, lead.dRel, lead.vRel, lead.aLeadK, CS.out.vEgo)
+        lead_coast_allowed = all(lead_allows_coasting(lead.status, lead.dRel, lead.vRel, lead.aLeadK,
+                                                      max(CC_SP.leadCoastMinDistance, 6.))
                                  for lead in (CC_SP.leadOne, CC_SP.leadTwo))
         can_sends.append(hyundaicanfd.create_acc_control(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
                                                          set_speed_in_units, hud_control, self.lead_data, CS.main_cruise_enabled, self.tuning,

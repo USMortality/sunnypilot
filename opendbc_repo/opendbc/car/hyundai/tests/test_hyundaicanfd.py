@@ -34,11 +34,11 @@ def test_longitudinal_idle_with_approved_steady_lead():
 
 def test_lead_coasting_requires_gap_and_steady_speed():
   from opendbc.sunnypilot.car.hyundai.lead_data_ext import lead_allows_coasting
-  assert lead_allows_coasting(True, 50., 0., 0., 20.)
-  assert not lead_allows_coasting(True, 40., 0., 0., 20.)
-  assert not lead_allows_coasting(True, 50., -0.5, 0., 20.)
-  assert not lead_allows_coasting(True, 50., 0., -0.5, 20.)
-  assert not lead_allows_coasting(True, float('nan'), 0., 0., 20.)
+  assert lead_allows_coasting(True, 50., 0., 0., 38.)
+  assert not lead_allows_coasting(True, 35., 0., 0., 38.)
+  assert not lead_allows_coasting(True, 50., -0.5, 0., 38.)
+  assert not lead_allows_coasting(True, 50., 0., -0.5, 38.)
+  assert not lead_allows_coasting(True, float('nan'), 0., 0., 38.)
 
 
 def test_idle_output_restores_active_acc_and_preserves_stop_requests():
