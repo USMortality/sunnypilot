@@ -146,6 +146,7 @@ class CarControlSP:
   intelligentCruiseButtonManagement: 'IntelligentCruiseButtonManagement' = field(default_factory=lambda: IntelligentCruiseButtonManagement())
   longitudinalIdle: bool = auto_field()
   leadCoastMinDistance: float = auto_field()
+  leadCoastTimeGaps: list[float] = auto_field()
 
   @auto_dataclass
   class Param:

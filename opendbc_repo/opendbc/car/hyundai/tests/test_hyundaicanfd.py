@@ -59,3 +59,50 @@ def test_idle_output_restores_active_acc_and_preserves_stop_requests():
   tuning.stopping = True
   assert output(True)['ACCMode'] == 1
   assert output(True)['StopReq'] == 1
+
+
+def test_saved_can_headway_ignores_decel_and_holds_fixed_baseline():
+  from opendbc.sunnypilot.car.hyundai.lead_data_ext import LeadCoastGap
+  gap = LeadCoastGap()
+  absent = (False, 0., 0., 0.)
+  assert gap.update(True, ((True, 50., 0., 0.), absent), 20., 38.)
+  # 2.5 s entry headway: a faster ego and a slightly closing lead still have
+  # more than 2.25 s, despite the raw speed/acceleration entry gates failing.
+  assert gap.update(True, ((True, 55., -0.5, -0.8), absent), 22., 41.8)
+  assert gap.update(True, ((True, 46., -0.5, -0.8), absent), 20., 38.)
+  assert not gap.update(True, ((True, 45., 0., 0.), absent), 20., 38.)
+  # A rebound cannot silently restart N while the request is still asserted.
+  assert not gap.update(True, ((True, 50., 0., 0.), absent), 20., 38.)
+  assert not gap.update(False, ((True, 50., 0., 0.), absent), 20., 38.)
+  assert gap.update(True, ((True, 50., 0., 0.), absent), 20., 38.)
+
+
+def test_can_new_lead_and_invalid_data_reject_saved_coast():
+  from opendbc.sunnypilot.car.hyundai.lead_data_ext import LeadCoastGap
+  gap = LeadCoastGap()
+  absent = (False, 0., 0., 0.)
+  assert gap.update(True, (absent, absent), 20., 38.)
+  assert not gap.update(True, ((True, 60., 0., 0.), absent), 20., 38.)
+  gap.update(False, (absent, absent), 20., 38.)
+  assert gap.update(True, ((True, 50., 0., 0.), absent), 20., 38.)
+  assert not gap.update(True, ((True, float('nan'), 0., 0.), absent), 20., 38.)
+
+
+def test_can_uses_planner_baseline_instead_of_new_raw_sample():
+  from opendbc.sunnypilot.car.hyundai.lead_data_ext import LeadCoastGap
+  gap = LeadCoastGap()
+  absent = (False, 0., 0., 0.)
+  # Planner entered at 50 m / 20 m/s = 2.5 s. The later CAN sample is
+  # already slowing, but still above the planner's 2.25 s release boundary.
+  assert gap.update(True, ((True, 46., -0.5, -0.8), absent), 20., 38., saved_time_gaps=[2.5, 0.])
+  assert gap.saved_time_gaps == [2.5, 0.]
+  assert not gap.update(True, ((True, 45., 0., 0.), absent), 20., 38., saved_time_gaps=[2.5, 0.])
+  assert not gap.update(True, ((True, 50., 0., 0.), absent), 20., 38., saved_time_gaps=[2.5, 0.])
+
+
+def test_can_rejects_missing_or_invalid_planner_baseline():
+  from opendbc.sunnypilot.car.hyundai.lead_data_ext import LeadCoastGap
+  leads = ((True, 50., 0., 0.), (False, 0., 0., 0.))
+  for baseline in ([], [2.5], [2.5, 0., 0.], [float('nan'), 0.], [float('inf'), 0.], [-2.5, 0.]):
+    gap = LeadCoastGap()
+    assert not gap.update(True, leads, 20., 38., saved_time_gaps=baseline)

@@ -11,7 +11,7 @@ from opendbc.car.interfaces import CarControllerBase
 from opendbc.sunnypilot.car.hyundai.escc import EsccCarController
 from opendbc.sunnypilot.car.hyundai.icbm import IntelligentCruiseButtonManagementInterface
 from opendbc.sunnypilot.car.hyundai.longitudinal.controller import LongitudinalController
-from opendbc.sunnypilot.car.hyundai.lead_data_ext import LeadDataCarController, lead_allows_coasting
+from opendbc.sunnypilot.car.hyundai.lead_data_ext import LeadDataCarController, LeadCoastGap
 from opendbc.sunnypilot.car.hyundai.mads import MadsCarController
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -68,6 +68,7 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
     self.packer = CANPacker(dbc_names[Bus.pt])
     self.angle_limit_counter = 0
 
+    self.coast_lead_gap = LeadCoastGap()
     self.accel_last = 0
     self.apply_torque_last = 0
     self.car_fingerprint = CP.carFingerprint
@@ -224,9 +225,12 @@ class CarController(CarControllerBase, EsccCarController, LeadDataCarController,
         can_sends.extend(hyundaicanfd.create_fca_warning_light(self.packer, self.CAN, self.frame))
       if self.frame % 2 == 0:
         # Recheck raw leads here; display lead visibility has a deliberate delay.
-        lead_coast_allowed = all(lead_allows_coasting(lead.status, lead.dRel, lead.vRel, lead.aLeadK,
-                                                      max(CC_SP.leadCoastMinDistance, 6.))
-                                 for lead in (CC_SP.leadOne, CC_SP.leadTwo))
+        idle_requested = bool(getattr(CC_SP, "longitudinalIdle", False) and CC.longActive and CC.enabled and
+                              not stopping and not CC.cruiseControl.override)
+        raw_leads = tuple((lead.status, lead.dRel, lead.vRel, lead.aLeadK) for lead in (CC_SP.leadOne, CC_SP.leadTwo))
+        lead_coast_allowed = self.coast_lead_gap.update(idle_requested, raw_leads, CS.out.vEgo,
+                                                       max(CC_SP.leadCoastMinDistance, 6.),
+                                                       saved_time_gaps=CC_SP.leadCoastTimeGaps)
         can_sends.append(hyundaicanfd.create_acc_control(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
                                                          set_speed_in_units, hud_control, self.lead_data, CS.main_cruise_enabled, self.tuning,
                                                          getattr(CC_SP, "longitudinalIdle", False) and CC.longActive and lead_coast_allowed,
