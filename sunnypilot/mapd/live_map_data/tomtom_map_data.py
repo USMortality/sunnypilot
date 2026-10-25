@@ -104,6 +104,19 @@ class TomTomMapData:
   def _cache_key(points):
     return "snap-v1:" + fingerprint(points)
 
+  @staticmethod
+  def _persistent_ttl(cache_control):
+    directives = {}
+    for directive in cache_control.split(","):
+      name, separator, value = directive.strip().partition("=")
+      directives[name.lower()] = value.strip().strip('"') if separator else None
+    if "max-age" not in directives or "no-cache" in directives or "no-store" in directives:
+      return None
+    try:
+      return min(86400.0, float(directives["max-age"]))
+    except (TypeError, ValueError):
+      return None
+
   def _fetch(self, key, points, heading):
     body = {"points": []}
     for i, (lat, lon) in enumerate(points):
@@ -117,13 +130,9 @@ class TomTomMapData:
     parsed["reference"] = points
     cache_control = response.headers.get("Cache-Control", "")
     # No cross-drive reuse unless an affirmative max-age is returned; no-cache/no-store remain session-only.
-    persistent = "max-age=" in cache_control and "no-cache" not in cache_control and "no-store" not in cache_control
-    ttl = 900.0
-    if persistent:
-      try:
-        ttl = min(86400.0, float(cache_control.split("max-age=", 1)[1].split(",", 1)[0]))
-      except ValueError:
-        persistent = False
+    persistent_ttl = self._persistent_ttl(cache_control)
+    persistent = persistent_ttl is not None
+    ttl = persistent_ttl if persistent else 900.0
     parsed["expires"] = time.time() + ttl  # noqa: TID251 — persisted expiry requires wall time.
     self.cache.put(key, "snap-v1", parsed, "response-header:" + cache_control[:120], ttl, persistent=persistent)
     return parsed

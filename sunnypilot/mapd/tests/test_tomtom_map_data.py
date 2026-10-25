@@ -112,6 +112,16 @@ def test_projection_count_must_match_submitted_points(returned_count):
   assert not TomTomMapData._parse_response(payload, 2)["projectedValid"]
 
 
+@pytest.mark.parametrize(("cache_control", "expected"), [
+  ("max-age=3600", 3600),
+  ("public, max-age=3600, s-maxage=7200", 3600),
+  ("s-maxage=7200", None),
+  ("max-age=3600, no-store", None),
+])
+def test_only_exact_max_age_allows_persistent_cache(cache_control, expected):
+  assert TomTomMapData._persistent_ttl(cache_control) == expected
+
+
 def test_cache_session_expiry_persistence_and_budget(tmp_path):
   path = str(tmp_path / "cache")
   cache = TomTomCache(path, "drive-a", max_entries=2)
