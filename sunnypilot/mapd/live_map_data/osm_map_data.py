@@ -15,9 +15,11 @@ from openpilot.sunnypilot.navd.helpers import Coordinate
 
 
 class OsmMapData(BaseMapData):
-  def __init__(self):
+  def __init__(self, speed_limit_provider=None):
     super().__init__()
     self.mem_params = Params("/dev/shm/params") if platform.system() != "Darwin" else self.params
+    self.speed_limit_provider = speed_limit_provider
+    self.provider_limits = None
 
   def update_location(self) -> None:
     location = self.sm['liveLocationKalman']
@@ -40,13 +42,22 @@ class OsmMapData(BaseMapData):
 
     self.mem_params.put("LastGPSPosition", json.dumps(params))
 
+    if self.speed_limit_provider is not None:
+      corridor = self.mem_params.get("MapRoadCorridor") or ""
+      self.speed_limit_provider.update(corridor, [self.last_position.latitude, self.last_position.longitude], self.last_bearing)
+      self.provider_limits = self.speed_limit_provider.limits([self.last_position.latitude, self.last_position.longitude])
+
   def get_current_speed_limit(self) -> float:
+    if self.provider_limits is not None:
+      return self.provider_limits[0]
     return float(self.mem_params.get("MapSpeedLimit") or 0.0)
 
   def get_current_road_name(self) -> str:
     return str(self.mem_params.get("RoadName") or "")
 
   def get_next_speed_limit_and_distance(self) -> tuple[float, float]:
+    if self.provider_limits is not None:
+      return self.provider_limits[1], self.provider_limits[2]
     next_speed_limit_section_str = self.mem_params.get("NextMapSpeedLimit")
     next_speed_limit_section = next_speed_limit_section_str if next_speed_limit_section_str else {}
     next_speed_limit = next_speed_limit_section.get('speedlimit', 0.0)
