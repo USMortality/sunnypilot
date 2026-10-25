@@ -145,8 +145,7 @@ class TomTomMapData:
       offset += length
     projected = payload.get("projectedPoints", [])
     projected_valid = len(projected) >= 2 and all(
-      str(point.get("properties", {}).get("snapResult", "")).lower()
-      not in ("", "offroad", "notsnapped", "failed", "maxdistanceexceeded")
+      str(point.get("properties", {}).get("snapResult", "")).lower() == "matched"
       for point in projected)
     return {"geometry": geometry, "sections": sections, "projectedValid": projected_valid,
             "fetched": time.time()}  # noqa: TID251 — provenance records wall time.

@@ -80,18 +80,25 @@ def test_unknown_upcoming_section_falls_back_atomically(tmp_path):
   assert adapter.limits([.002, 0]) is None
 
 
-def test_max_distance_exceeded_projection_is_invalid():
+@pytest.mark.parametrize(("snap_result", "expected"), [
+  ("Matched", True),
+  ("matched", True),
+  ("MaxDistanceExceeded", False),
+  ("Snapped", False),
+  ("FutureUnknownValue", False),
+])
+def test_only_matched_projection_is_valid(snap_result, expected):
   payload = {
     "route": [{
       "geometry": {"coordinates": [[0, 0], [0, .004]]},
       "properties": {"confidence": .9, "speedLimits": [{"value": 50, "unit": "kmph", "type": "Maximum"}]},
     }],
     "projectedPoints": [
-      {"properties": {"snapResult": "Snapped"}},
-      {"properties": {"snapResult": "MaxDistanceExceeded"}},
+      {"properties": {"snapResult": "Matched"}},
+      {"properties": {"snapResult": snap_result}},
     ],
   }
-  assert not TomTomMapData._parse_response(payload)["projectedValid"]
+  assert TomTomMapData._parse_response(payload)["projectedValid"] is expected
 
 
 def test_cache_session_expiry_persistence_and_budget(tmp_path):
