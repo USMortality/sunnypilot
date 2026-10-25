@@ -131,8 +131,8 @@ def main_thread():
     with open("/data/sunnypilot/slc.json") as f:
       provider_config = json.load(f)
       provider = str(provider_config.get("speedLimitProvider", "osm")).lower()
-  except (OSError, ValueError, TypeError):
-    pass
+  except (OSError, ValueError, TypeError, AttributeError):
+    provider_config = {}
   # OsmMapData remains the only liveMapDataSP publisher and supplies names/fallback.
   try:
     monthly_limit = max(0, int(provider_config.get("tomtomMonthlyRequestLimit", 75000)))
