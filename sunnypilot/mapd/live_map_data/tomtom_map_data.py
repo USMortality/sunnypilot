@@ -145,7 +145,8 @@ class TomTomMapData:
       offset += length
     projected = payload.get("projectedPoints", [])
     projected_valid = len(projected) >= 2 and all(
-      str(point.get("properties", {}).get("snapResult", "")).lower() not in ("", "offroad", "notsnapped", "failed")
+      str(point.get("properties", {}).get("snapResult", "")).lower()
+      not in ("", "offroad", "notsnapped", "failed", "maxdistanceexceeded")
       for point in projected)
     return {"geometry": geometry, "sections": sections, "projectedValid": projected_valid,
             "fetched": time.time()}  # noqa: TID251 — provenance records wall time.
@@ -179,7 +180,10 @@ class TomTomMapData:
     for section in self.result["sections"]:
       if section["start"] <= progress <= section["end"]:
         current = section["speed"]
-      elif section["start"] > progress and section["speed"] is not None and section["speed"] != current:
-        upcoming = (section["speed"], section["start"] - progress)
-        break
+      elif section["start"] > progress:
+        if section["speed"] is None:
+          return None
+        if section["speed"] != current:
+          upcoming = (section["speed"], section["start"] - progress)
+          break
     return (current, *upcoming) if current is not None else None

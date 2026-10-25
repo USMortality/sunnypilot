@@ -73,6 +73,27 @@ def test_transition_distance_and_unknown_current_fallback(tmp_path):
   assert adapter.limits([.002, 0]) is None
 
 
+def test_unknown_upcoming_section_falls_back_atomically(tmp_path):
+  adapter = TomTomMapData(cache=TomTomCache(str(tmp_path / "c"), "s"), key_path=str(tmp_path / "missing"))
+  adapter.result = result()
+  adapter.result["sections"].insert(1, {"start": 300, "end": 350, "speed": None, "confidence": .9})
+  assert adapter.limits([.002, 0]) is None
+
+
+def test_max_distance_exceeded_projection_is_invalid():
+  payload = {
+    "route": [{
+      "geometry": {"coordinates": [[0, 0], [0, .004]]},
+      "properties": {"confidence": .9, "speedLimits": [{"value": 50, "unit": "kmph", "type": "Maximum"}]},
+    }],
+    "projectedPoints": [
+      {"properties": {"snapResult": "Snapped"}},
+      {"properties": {"snapResult": "MaxDistanceExceeded"}},
+    ],
+  }
+  assert not TomTomMapData._parse_response(payload)["projectedValid"]
+
+
 def test_cache_session_expiry_persistence_and_budget(tmp_path):
   path = str(tmp_path / "cache")
   cache = TomTomCache(path, "drive-a", max_entries=2)
