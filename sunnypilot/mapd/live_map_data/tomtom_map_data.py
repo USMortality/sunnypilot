@@ -150,7 +150,8 @@ class TomTomMapData:
       if len(points) < 2:
         continue
       props = element.get("properties", {})
-      limit = next((speed_ms(x) for x in props.get("speedLimits", []) if speed_ms(x) is not None), None)
+      speed_limit = props.get("speedLimits")
+      limit = speed_ms(speed_limit) if isinstance(speed_limit, dict) else None
       length = polyline_length(points)
       sections.append({"start": offset, "end": offset + length, "speed": limit, "confidence": float(props.get("confidence", 0))})
       geometry.extend(points if not geometry else points[1:])

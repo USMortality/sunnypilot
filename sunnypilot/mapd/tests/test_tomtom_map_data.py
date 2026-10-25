@@ -91,14 +91,16 @@ def test_only_matched_projection_is_valid(snap_result, expected):
   payload = {
     "route": [{
       "geometry": {"coordinates": [[0, 0], [0, .004]]},
-      "properties": {"confidence": .9, "speedLimits": [{"value": 50, "unit": "kmph", "type": "Maximum"}]},
+      "properties": {"confidence": .9, "speedLimits": {"value": 50, "unit": "kmph", "type": "Maximum"}},
     }],
     "projectedPoints": [
       {"properties": {"snapResult": "Matched"}},
       {"properties": {"snapResult": snap_result}},
     ],
   }
-  assert TomTomMapData._parse_response(payload, 2)["projectedValid"] is expected
+  parsed = TomTomMapData._parse_response(payload, 2)
+  assert parsed["projectedValid"] is expected
+  assert parsed["sections"][0]["speed"] == pytest.approx(50 / 3.6)
 
 
 @pytest.mark.parametrize("returned_count", [1, 3])
