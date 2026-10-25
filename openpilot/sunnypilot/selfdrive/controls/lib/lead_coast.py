@@ -2,6 +2,8 @@ import math
 
 
 LEAD_COAST_RELEASE_RATIO = 0.9
+# Never remain in neutral inside roughly one compact-car length, regardless of
+# the saved time gap. This also keeps the division-based release stable at low speed.
 LEAD_COAST_MIN_DISTANCE = 6.
 
 
