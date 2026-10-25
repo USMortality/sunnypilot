@@ -1,3 +1,5 @@
+import concurrent.futures
+
 import pytest
 
 from openpilot.sunnypilot.mapd.live_map_data.corridor import Corridor, closest_progress, fingerprint
@@ -183,6 +185,21 @@ def test_request_window_change_reuses_active_result_with_remaining_coverage(tmp_
   adapter.update(corridor(points=line(20), progress=900), [.009, 0], now=1)
 
   assert adapter.result is not None
+  assert adapter.result_key == adapter._cache_key(first)
+
+
+def test_request_window_change_reuses_completed_result_with_remaining_coverage(tmp_path):
+  adapter = TomTomMapData(cache=TomTomCache(str(tmp_path / "c"), "s"), key_path=str(tmp_path / "missing"))
+  first = Corridor.parse(corridor(points=line(20), progress=100)).request_paths()[0]
+  completed = result(first)
+  completed["reference"] = first
+  adapter.future = concurrent.futures.Future()
+  adapter.future.set_result(completed)
+  adapter.future_key = adapter._cache_key(first)
+
+  adapter.update(corridor(points=line(20), progress=500), [.005, 0], now=1)
+
+  assert adapter.result is completed
   assert adapter.result_key == adapter._cache_key(first)
 
 

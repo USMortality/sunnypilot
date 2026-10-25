@@ -72,10 +72,11 @@ class TomTomMapData:
         value = None
       self.future = None
       self.future_key = None
-      if completed_key != key:
-        self.result = None
-      elif value and self._validate(value, corridor):
-        self.result, self.result_key, self.failures = value, key, 0
+      if value and self._validate(value, corridor):
+        # The moving request window may advance while a request is in flight. Install the
+        # response under its original key and let the active-result checks below validate
+        # its remaining geometry against the current directed path.
+        self.result, self.result_key, self.failures = value, completed_key, 0
       else:
         self.result = None
         self.failures += 1
