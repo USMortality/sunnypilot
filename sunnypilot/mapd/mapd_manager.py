@@ -10,6 +10,7 @@ import platform
 import os
 import glob
 import shutil
+import sqlite3
 from datetime import datetime
 
 from openpilot.common.params import Params
@@ -138,7 +139,13 @@ def main_thread():
     monthly_limit = max(0, int(provider_config.get("tomtomMonthlyRequestLimit", 75000)))
   except (TypeError, ValueError):
     monthly_limit = 75000
-  live_map_sp = OsmMapData(TomTomMapData(monthly_limit=monthly_limit) if provider == "tomtom" else None)
+  tomtom_map_data = None
+  if provider == "tomtom":
+    try:
+      tomtom_map_data = TomTomMapData(monthly_limit=monthly_limit)
+    except (OSError, sqlite3.DatabaseError):
+      cloudlog.exception("mapd: failed to initialize TomTom map data; falling back to OSM")
+  live_map_sp = OsmMapData(tomtom_map_data)
 
   # Create folder needed for OSM
   try:
