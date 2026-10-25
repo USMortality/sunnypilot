@@ -215,6 +215,8 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
         self._draw_pre_active_arrow(sign_rect)
       else:
         self._draw_ahead_info(sign_rect)
+      # Draw TomTom/OSM source indicator
+      self._draw_source_indicator(sign_rect)
 
   def _draw_sign_main(self, rect, alpha=1.0):
     speed_limit_warning_enabled = ui_state.speed_limit_mode is not None and ui_state.speed_limit_mode >= SpeedLimitMode.warning
@@ -321,6 +323,30 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
     self._draw_text_centered(self.font_demi, "AHEAD", 40, rl.Vector2(mid_x, rect.y + 28), Colors.GREY)
     self._draw_text_centered(self.font_bold, str(round(self.speed_limit_ahead)), 70, rl.Vector2(mid_x, rect.y + 82), Colors.WHITE)
     self._draw_text_centered(self.font_norm, self._format_dist(self.speed_limit_ahead_dist), 36, rl.Vector2(mid_x, rect.y + 134), Colors.GREY)
+
+  def _draw_source_indicator(self, sign_rect):
+    """Draw TT or OSM indicator to the right of speed limit sign."""
+    # Only show if we have a valid speed limit
+    if not (self.speed_limit_valid or self.speed_limit_last_valid):
+      return
+
+    # Read runtime source status (written even when diagnostic logging is disabled).
+    source = "OSM"
+    try:
+      with open("/tmp/tomtom_active") as f:
+        content = f.read().strip()
+        if content.startswith("TomTom:"):
+          source = "TT"
+    except OSError:
+      pass
+
+    # Position to the right of sign
+    indicator_x = sign_rect.x + sign_rect.width + 8
+    indicator_y = sign_rect.y + sign_rect.height - 30
+
+    # Draw small text indicator
+    color = rl.Color(100, 200, 100, 200) if source == "TT" else rl.Color(150, 150, 150, 180)
+    rl.draw_text_ex(self.font_demi, source, rl.Vector2(indicator_x, indicator_y), 28, 0, color)
 
   @staticmethod
   def _format_dist(d):
