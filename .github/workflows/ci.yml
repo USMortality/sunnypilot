@@ -27,8 +27,6 @@ jobs:
       - name: Enforce 1,000 lines per source file
         shell: bash
         working-directory: ${{ github.workspace }}
-        env:
-          QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           node --input-type=module <<'QUALITY_FILE_LINES'
           // @ts-check
@@ -37,7 +35,7 @@ jobs:
           import { join } from "node:path";
 
           export const MAX_FILE_LINES = 1_000;
-          const SOURCE_FILE = /\.(?:pyi?|c|cc|cpp|cxx|h|hh|hpp|hxx|m|mm|[cm]?[jt]s|[jt]sx|vue|svelte|astro)$/i;
+          const SOURCE_FILE = /\.(?:[cm]?[jt]s|[jt]sx|vue|svelte|astro)$/i;
 
           /** @param {string} content */
           export function countLines(content) {
@@ -48,8 +46,7 @@ jobs:
 
           /** @param {string} repoPath */
           export async function checkFileLines(repoPath) {
-            const base = process.env.QUALITY_BASE_SHA || "HEAD^";
-            const output = execFileSync("git", ["diff", "--name-only", "--diff-filter=ACMR", "-z", `${base}...HEAD`, "--"], {
+            const output = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
               cwd: repoPath,
               encoding: "utf8",
               timeout: 15_000,
@@ -76,9 +73,9 @@ jobs:
               // Only a whole comment on the first line (after an optional shebang) is accepted.
               const header = content.replace(/^\uFEFF/, "").split(/\r\n|\n|\r/);
               const firstLine = header[header[0]?.startsWith("#!") ? 1 : 0] ?? "";
-              const marker = firstLine.match(/^(?:(?:\/\/|#) (file-lines-exception: .+)|<!-- (file-lines-exception: .+) -->)$/);
+              const marker = firstLine.match(/^(?:\/\/ (file-lines-exception: .+)|<!-- (file-lines-exception: .+) -->)$/);
               const exception = (marker?.[1] ?? marker?.[2] ?? "").match(/^file-lines-exception: max=([1-9]\d*) issue=(https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/issues\/[1-9]\d*)$/);
-              if (/^(?:\/\/|#|<!--)\s*file-lines-exception:/.test(firstLine)) {
+              if (/^(?:\/\/|<!--)\s*file-lines-exception:/.test(firstLine)) {
                 const maximum = Number(exception?.[1]);
                 if (!exception || !Number.isSafeInteger(maximum) || maximum <= MAX_FILE_LINES) {
                   violations.push({ path, lines, reason: "Invalid file-lines-exception: require max > 1000 and a GitHub issue URL." });
