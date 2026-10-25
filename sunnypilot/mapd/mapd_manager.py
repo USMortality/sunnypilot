@@ -10,6 +10,7 @@ import platform
 import os
 import glob
 import shutil
+import sqlite3
 from datetime import datetime
 
 from openpilot.common.params import Params
@@ -17,6 +18,7 @@ from openpilot.common.realtime import Ratekeeper, config_realtime_process
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
 from openpilot.sunnypilot.mapd.live_map_data.osm_map_data import OsmMapData
+from openpilot.sunnypilot.mapd.live_map_data.tomtom_map_data import TomTomMapData
 from openpilot.system.hardware.hw import Paths
 from openpilot.sunnypilot.mapd import MAPD_PATH
 from openpilot.sunnypilot.mapd.mapd_installer import VERSION, update_installed_version
@@ -124,7 +126,26 @@ def main_thread():
   config_realtime_process([0, 1, 2, 3], 5)
 
   rk = Ratekeeper(1, print_delay_threshold=None)
-  live_map_sp = OsmMapData()
+  provider = "osm"
+  provider_config = {}
+  try:
+    with open("/data/sunnypilot/slc.json") as f:
+      provider_config = json.load(f)
+      provider = str(provider_config.get("speedLimitProvider", "osm")).lower()
+  except (OSError, ValueError, TypeError, AttributeError):
+    provider_config = {}
+  # OsmMapData remains the only liveMapDataSP publisher and supplies names/fallback.
+  try:
+    monthly_limit = max(0, int(provider_config.get("tomtomMonthlyRequestLimit", 75000)))
+  except (TypeError, ValueError):
+    monthly_limit = 75000
+  tomtom_map_data = None
+  if provider == "tomtom":
+    try:
+      tomtom_map_data = TomTomMapData(monthly_limit=monthly_limit)
+    except (OSError, sqlite3.DatabaseError):
+      cloudlog.exception("mapd: failed to initialize TomTom map data; falling back to OSM")
+  live_map_sp = OsmMapData(tomtom_map_data)
 
   # Create folder needed for OSM
   try:
