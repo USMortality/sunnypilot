@@ -139,6 +139,20 @@ def test_cache_session_expiry_persistence_and_budget(tmp_path):
   assert not cache.allow_and_count("snap", 1, now=1)
 
 
+def test_cache_enforces_daily_and_monthly_budgets(tmp_path):
+  cache = TomTomCache(str(tmp_path / "cache"), "drive")
+  day = 24 * 60 * 60
+
+  assert not cache.allow_and_count("disabled", 0, now=1)
+  assert cache.allow_and_count("daily", 10, now=1, daily_limit=1)
+  assert not cache.allow_and_count("daily", 10, now=2, daily_limit=1)
+  assert cache.allow_and_count("daily", 10, now=day + 1, daily_limit=1)
+
+  assert cache.allow_and_count("monthly", 2, now=1, daily_limit=10)
+  assert cache.allow_and_count("monthly", 2, now=day + 1, daily_limit=10)
+  assert not cache.allow_and_count("monthly", 2, now=2 * day + 1, daily_limit=10)
+
+
 def test_invalid_corridor_clears_atomically(tmp_path):
   adapter = TomTomMapData(cache=TomTomCache(str(tmp_path / "c"), "s"), key_path=str(tmp_path / "missing"))
   adapter.result = result()
