@@ -74,11 +74,13 @@ class Corridor:
 
   def request_paths(self, minimum_m=500.0, maximum_m=1000.0, maximum_points=100):
     base = self.geometry
-    paths = [base]
+    paths = []
     for branch in self.continuations:
       pts = normalized_geometry(branch.get("geometry", []))
       if len(pts) >= 2 and distance_m(base[-1], pts[0]) <= 30:
         paths.append(base + pts[1:])
+    if not paths:
+      paths.append(base)
     answer = []
     for path in paths[:4]:
       # Keep the tail around the vehicle and a bounded look-ahead.

@@ -150,6 +150,14 @@ def test_request_window_changes_cache_key_with_progress():
   assert TomTomMapData._cache_key(first) != TomTomMapData._cache_key(later)
 
 
+def test_single_continuation_replaces_unextended_base_candidate():
+  raw = corridor(points=line(5), continuations=[{"geometry": [[.004, 0], [.008, 0]]}])
+  paths = Corridor.parse(raw).request_paths()
+
+  assert len(paths) == 1
+  assert paths[0][-1] == [.008, 0]
+
+
 def test_request_path_is_sampled_to_provider_limit():
   points = [[i * .00004, 0] for i in range(256)]
   full_path = Corridor.parse(corridor(points=points, progress=50)).request_paths(maximum_points=256)[0]
@@ -166,21 +174,24 @@ def test_fetch_rejects_more_than_provider_limit(tmp_path):
     adapter._fetch("key", line(MAX_REQUEST_POINTS + 1), None)
 
 
-def test_request_window_change_clears_active_result(tmp_path):
+def test_request_window_change_reuses_active_result_with_remaining_coverage(tmp_path):
   adapter = TomTomMapData(cache=TomTomCache(str(tmp_path / "c"), "s"), key_path=str(tmp_path / "missing"))
   first = Corridor.parse(corridor(points=line(20), progress=100)).request_paths()[0]
-  adapter.result = result()
+  adapter.result = result(line(20))
   adapter.result_key = adapter._cache_key(first)
 
   adapter.update(corridor(points=line(20), progress=900), [.009, 0], now=1)
 
-  assert adapter.result is None
-  assert adapter.result_key is None
+  assert adapter.result is not None
+  assert adapter.result_key == adapter._cache_key(first)
 
 
 @pytest.mark.parametrize("raw", [
   corridor(confidence=.49),
-  corridor(continuations=[{"geometry": [[.007, 0], [.012, 0]]}]),
+  corridor(continuations=[
+    {"geometry": [[.007, 0], [.012, 0]]},
+    {"geometry": [[.007, 0], [.012, .001]]},
+  ]),
 ])
 def test_unreliable_or_ambiguous_corridor_does_not_request(tmp_path, raw):
   key_path = tmp_path / "keys"

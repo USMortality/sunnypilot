@@ -64,9 +64,6 @@ class TomTomMapData:
       self.result = None
       return
     key = self._cache_key(paths[0])
-    if self.result_key != key:
-      self.result = None
-      self.result_key = None
     if self.future and self.future.done():
       completed_key = self.future_key
       try:
@@ -83,7 +80,7 @@ class TomTomMapData:
         self.result = None
         self.failures += 1
         self.retry_after = now + min(300.0, 5.0 * 2 ** min(self.failures, 6))
-    if self.result_key == key and self.result:
+    if self.result:
       if self.result.get("expires", now + 1) <= now:
         self.result = None
       else:
@@ -91,6 +88,7 @@ class TomTomMapData:
         if lateral <= 20 and polyline_length(self.result["geometry"]) - progress > 120:
           return
         self.result = None
+      self.result_key = None
     cached = self.cache.get(key, now)
     if cached and self._validate(cached, corridor):
       self.result, self.result_key = cached, key
