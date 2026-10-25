@@ -113,7 +113,7 @@ class TomTomMapData:
                             params={"key": self.key, "fields": FIELDS, "vehicleType": "PassengerCar", "measurementSystem": "metric"},
                             json=body, timeout=(3.0, 5.0))
     response.raise_for_status()
-    parsed = self._parse_response(response.json())
+    parsed = self._parse_response(response.json(), len(points))
     parsed["reference"] = points
     cache_control = response.headers.get("Cache-Control", "")
     # No cross-drive reuse unless an affirmative max-age is returned; no-cache/no-store remain session-only.
@@ -129,7 +129,7 @@ class TomTomMapData:
     return parsed
 
   @staticmethod
-  def _parse_response(payload):
+  def _parse_response(payload, expected_projected_points):
     geometry, sections = [], []
     offset = 0.0
     for element in payload.get("route", []):
@@ -144,7 +144,7 @@ class TomTomMapData:
       geometry.extend(points if not geometry else points[1:])
       offset += length
     projected = payload.get("projectedPoints", [])
-    projected_valid = len(projected) >= 2 and all(
+    projected_valid = expected_projected_points >= 2 and len(projected) == expected_projected_points and all(
       str(point.get("properties", {}).get("snapResult", "")).lower() == "matched"
       for point in projected)
     return {"geometry": geometry, "sections": sections, "projectedValid": projected_valid,

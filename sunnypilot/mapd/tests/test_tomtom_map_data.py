@@ -98,7 +98,18 @@ def test_only_matched_projection_is_valid(snap_result, expected):
       {"properties": {"snapResult": snap_result}},
     ],
   }
-  assert TomTomMapData._parse_response(payload)["projectedValid"] is expected
+  assert TomTomMapData._parse_response(payload, 2)["projectedValid"] is expected
+
+
+@pytest.mark.parametrize("returned_count", [1, 3])
+def test_projection_count_must_match_submitted_points(returned_count):
+  payload = {
+    "projectedPoints": [
+      {"properties": {"snapResult": "Matched"}}
+      for _ in range(returned_count)
+    ],
+  }
+  assert not TomTomMapData._parse_response(payload, 2)["projectedValid"]
 
 
 def test_cache_session_expiry_persistence_and_budget(tmp_path):
