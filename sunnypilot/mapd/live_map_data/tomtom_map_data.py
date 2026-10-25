@@ -13,6 +13,7 @@ ENDPOINT = "https://api.tomtom.com/snapToRoads/1"
 FIELDS = ("{projectedPoints{geometry{coordinates},properties{snapResult}}," +
           "route{geometry{coordinates},properties{id,speedLimits{value,unit,type}," +
           "traveledDistance{value,unit},formOfWay,confidence}}}")
+MAX_REQUEST_POINTS = 100
 
 
 def load_api_key(path="/data/sunnypilot/provider-keys.env"):
@@ -118,6 +119,8 @@ class TomTomMapData:
       return None
 
   def _fetch(self, key, points, heading):
+    if not 2 <= len(points) <= MAX_REQUEST_POINTS:
+      raise ValueError(f"Snap to Roads requires 2..{MAX_REQUEST_POINTS} points")
     body = {"points": []}
     for i, (lat, lon) in enumerate(points):
       props = {"heading": heading} if heading is not None and i < 2 else {}

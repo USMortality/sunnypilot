@@ -2,7 +2,7 @@ import pytest
 
 from openpilot.sunnypilot.mapd.live_map_data.corridor import Corridor, closest_progress, fingerprint
 from openpilot.sunnypilot.mapd.live_map_data.tomtom_cache import TomTomCache
-from openpilot.sunnypilot.mapd.live_map_data.tomtom_map_data import TomTomMapData, speed_ms
+from openpilot.sunnypilot.mapd.live_map_data.tomtom_map_data import MAX_REQUEST_POINTS, TomTomMapData, speed_ms
 
 
 def line(n=8, lon=0.0):
@@ -146,6 +146,22 @@ def test_request_window_changes_cache_key_with_progress():
   first = Corridor.parse(corridor(points=line(20), progress=100)).request_paths()[0]
   later = Corridor.parse(corridor(points=line(20), progress=900)).request_paths()[0]
   assert TomTomMapData._cache_key(first) != TomTomMapData._cache_key(later)
+
+
+def test_request_path_is_sampled_to_provider_limit():
+  points = [[i * .00004, 0] for i in range(256)]
+  full_path = Corridor.parse(corridor(points=points, progress=50)).request_paths(maximum_points=256)[0]
+  path = Corridor.parse(corridor(points=points, progress=50)).request_paths()[0]
+
+  assert len(path) == MAX_REQUEST_POINTS
+  assert path[0] == full_path[0]
+  assert path[-1] == full_path[-1]
+
+
+def test_fetch_rejects_more_than_provider_limit(tmp_path):
+  adapter = TomTomMapData(cache=TomTomCache(str(tmp_path / "c"), "s"), key_path=str(tmp_path / "missing"))
+  with pytest.raises(ValueError, match="2..100 points"):
+    adapter._fetch("key", line(MAX_REQUEST_POINTS + 1), None)
 
 
 def test_request_window_change_clears_active_result(tmp_path):

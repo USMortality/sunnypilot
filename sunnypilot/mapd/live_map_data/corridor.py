@@ -72,7 +72,7 @@ class Corridor:
     return cls(expected, points, max(0.0, float(data.get("progressM", 0))),
                float(data.get("confidence", 0)), continuations)
 
-  def request_paths(self, minimum_m=500.0, maximum_m=1000.0):
+  def request_paths(self, minimum_m=500.0, maximum_m=1000.0, maximum_points=100):
     base = self.geometry
     paths = [base]
     for branch in self.continuations:
@@ -92,5 +92,10 @@ class Corridor:
           selected.append(b)
         walked += seg
       if len(selected) >= 2 and polyline_length(selected) >= minimum_m * .7:
+        if len(selected) > maximum_points:
+          # Snap to Roads accepts at most 100 points. Preserve the complete
+          # request extent while sampling dense corridor geometry uniformly.
+          last = len(selected) - 1
+          selected = [selected[round(i * last / (maximum_points - 1))] for i in range(maximum_points)]
         answer.append(selected)
     return answer
