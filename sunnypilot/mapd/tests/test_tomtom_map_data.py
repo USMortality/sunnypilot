@@ -1,4 +1,5 @@
 import concurrent.futures
+import sqlite3
 
 import pytest
 
@@ -244,4 +245,31 @@ def test_unreliable_or_ambiguous_corridor_does_not_request(tmp_path, raw):
   key_path.write_text("TOMTOM_API_KEY=test\n")
   adapter = TomTomMapData(cache=TomTomCache(str(tmp_path / "c"), "s"), key_path=str(key_path))
   adapter.update(raw, [0, 0], now=1)
+  assert adapter.future is None
+
+
+@pytest.mark.parametrize("error", [sqlite3.DatabaseError("database failure"), OSError("filesystem failure")])
+def test_cache_read_failure_does_not_escape_update(tmp_path, error):
+  key_path = tmp_path / "keys"
+  key_path.write_text("TOMTOM_API_KEY=test\n")
+  cache = TomTomCache(str(tmp_path / "c"), "s")
+  cache.get = lambda *_args: (_ for _ in ()).throw(error)
+  cache.allow_and_count = lambda *_args: False
+  adapter = TomTomMapData(cache=cache, key_path=str(key_path))
+
+  adapter.update(corridor(), [0, 0], now=1)
+
+  assert adapter.future is None
+
+
+@pytest.mark.parametrize("error", [sqlite3.DatabaseError("database failure"), OSError("filesystem failure")])
+def test_cache_budget_failure_does_not_escape_or_request(tmp_path, error):
+  key_path = tmp_path / "keys"
+  key_path.write_text("TOMTOM_API_KEY=test\n")
+  cache = TomTomCache(str(tmp_path / "c"), "s")
+  cache.allow_and_count = lambda *_args: (_ for _ in ()).throw(error)
+  adapter = TomTomMapData(cache=cache, key_path=str(key_path))
+
+  adapter.update(corridor(), [0, 0], now=1)
+
   assert adapter.future is None

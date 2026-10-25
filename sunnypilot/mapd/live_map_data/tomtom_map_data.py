@@ -1,5 +1,6 @@
 import concurrent.futures
 import json
+import sqlite3
 import threading
 import time
 import uuid
@@ -91,13 +92,20 @@ class TomTomMapData:
           return
         self.result = None
       self.result_key = None
-    cached = self.cache.get(key, now)
+    try:
+      cached = self.cache.get(key, now)
+    except (OSError, sqlite3.DatabaseError):
+      cached = None
     if cached and self._validate(cached, corridor):
       self.result, self.result_key = cached, key
       return
     if not self.key or self.future or now < self.retry_after:
       return
-    if self.cache.allow_and_count("snapToRoads/1", self.monthly_limit, now):
+    try:
+      allowed = self.cache.allow_and_count("snapToRoads/1", self.monthly_limit, now)
+    except (OSError, sqlite3.DatabaseError):
+      allowed = False
+    if allowed:
       self.future_key = key
       self.future = self.executor.submit(self._fetch, key, paths[0], heading)
 
