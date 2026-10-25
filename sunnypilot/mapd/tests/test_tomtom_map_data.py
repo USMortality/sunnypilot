@@ -99,6 +99,18 @@ def test_request_window_changes_cache_key_with_progress():
   assert TomTomMapData._cache_key(first) != TomTomMapData._cache_key(later)
 
 
+def test_request_window_change_clears_active_result(tmp_path):
+  adapter = TomTomMapData(cache=TomTomCache(str(tmp_path / "c"), "s"), key_path=str(tmp_path / "missing"))
+  first = Corridor.parse(corridor(points=line(20), progress=100)).request_paths()[0]
+  adapter.result = result()
+  adapter.result_key = adapter._cache_key(first)
+
+  adapter.update(corridor(points=line(20), progress=900), [.009, 0], now=1)
+
+  assert adapter.result is None
+  assert adapter.result_key is None
+
+
 @pytest.mark.parametrize("raw", [
   corridor(confidence=.49),
   corridor(continuations=[{"geometry": [[.007, 0], [.012, 0]]}]),

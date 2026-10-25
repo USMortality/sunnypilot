@@ -63,6 +63,9 @@ class TomTomMapData:
       self.result = None
       return
     key = self._cache_key(paths[0])
+    if self.result_key != key:
+      self.result = None
+      self.result_key = None
     if self.future and self.future.done():
       completed_key = self.future_key
       try:
