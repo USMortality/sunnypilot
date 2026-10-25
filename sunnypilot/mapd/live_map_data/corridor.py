@@ -14,7 +14,7 @@ def distance_m(a, b):
 
 
 def polyline_length(points):
-  return sum(distance_m(a, b) for a, b in zip(points, points[1:]))
+  return sum(distance_m(a, b) for a, b in zip(points, points[1:], strict=False))
 
 
 def normalized_geometry(points):
@@ -36,7 +36,7 @@ def closest_progress(points, position):
   scale_y = EARTH_RADIUS_M * math.pi / 180
   px, py = (position[1] - points[0][1]) * scale_x, (position[0] - points[0][0]) * scale_y
   best_dist, best_progress, walked = math.inf, 0.0, 0.0
-  for a, b in zip(points, points[1:]):
+  for a, b in zip(points, points[1:], strict=False):
     ax, ay = (a[1] - points[0][1]) * scale_x, (a[0] - points[0][0]) * scale_y
     bx, by = (b[1] - points[0][1]) * scale_x, (b[0] - points[0][0]) * scale_y
     dx, dy = bx - ax, by - ay
@@ -84,7 +84,7 @@ class Corridor:
       # Keep the tail around the vehicle and a bounded look-ahead.
       start = max(0.0, self.progress_m - 50.0)
       walked, selected = 0.0, []
-      for a, b in zip(path, path[1:]):
+      for a, b in zip(path, path[1:], strict=False):
         seg = distance_m(a, b)
         if walked + seg >= start and walked <= self.progress_m + maximum_m:
           if not selected:

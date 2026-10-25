@@ -1,7 +1,5 @@
 import concurrent.futures
 import json
-import math
-import os
 import threading
 import time
 import uuid
@@ -12,7 +10,9 @@ from openpilot.sunnypilot.mapd.live_map_data.corridor import Corridor, closest_p
 from openpilot.sunnypilot.mapd.live_map_data.tomtom_cache import TomTomCache
 
 ENDPOINT = "https://api.tomtom.com/snapToRoads/1"
-FIELDS = "{projectedPoints{geometry{coordinates},properties{snapResult}},route{geometry{coordinates},properties{id,speedLimits{value,unit,type},traveledDistance{value,unit},formOfWay,confidence}}}"
+FIELDS = ("{projectedPoints{geometry{coordinates},properties{snapResult}}," +
+          "route{geometry{coordinates},properties{id,speedLimits{value,unit,type}," +
+          "traveledDistance{value,unit},formOfWay,confidence}}}")
 
 
 def load_api_key(path="/data/sunnypilot/provider-keys.env"):
@@ -43,6 +43,7 @@ class TomTomMapData:
     self.monthly_limit = monthly_limit  # 2,500 non-tile requests/day * 30; endpoint-specific safety guard.
     self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="tomtom-snap")
     self.future = None
+    self.future_key = None
     self.lock = threading.Lock()
     self.result = None
     self.result_key = None
@@ -50,20 +51,29 @@ class TomTomMapData:
     self.failures = 0
 
   def update(self, raw_corridor, position, heading=None, now=None):
-    now = time.time() if now is None else now
+    now = time.time() if now is None else now  # noqa: TID251 — cache/retry timestamps require wall time.
     try:
       corridor = Corridor.parse(raw_corridor)
     except (ValueError, KeyError, TypeError, json.JSONDecodeError):
       self.result = None
       return
-    key = "snap-v1:" + corridor.fingerprint
+    paths = corridor.request_paths()
+    # A weak match or multiple plausible continuations cannot identify a directed carriageway atomically.
+    if corridor.confidence < .5 or len(paths) != 1:
+      self.result = None
+      return
+    key = self._cache_key(paths[0])
     if self.future and self.future.done():
+      completed_key = self.future_key
       try:
         value = self.future.result()
       except Exception:
         value = None
       self.future = None
-      if value and self._validate(value, corridor):
+      self.future_key = None
+      if completed_key != key:
+        self.result = None
+      elif value and self._validate(value, corridor):
         self.result, self.result_key, self.failures = value, key, 0
       else:
         self.result = None
@@ -83,16 +93,22 @@ class TomTomMapData:
       return
     if not self.key or self.future or now < self.retry_after:
       return
-    paths = corridor.request_paths()
-    if paths and self.cache.allow_and_count("snapToRoads/1", self.monthly_limit, now):
+    if self.cache.allow_and_count("snapToRoads/1", self.monthly_limit, now):
+      self.future_key = key
       self.future = self.executor.submit(self._fetch, key, paths[0], heading)
+
+  @staticmethod
+  def _cache_key(points):
+    return "snap-v1:" + fingerprint(points)
 
   def _fetch(self, key, points, heading):
     body = {"points": []}
     for i, (lat, lon) in enumerate(points):
       props = {"heading": heading} if heading is not None and i < 2 else {}
       body["points"].append({"type": "Feature", "geometry": {"type": "Point", "coordinates": [lon, lat]}, "properties": props})
-    response = self.request(ENDPOINT, params={"key": self.key, "fields": FIELDS, "vehicleType": "PassengerCar", "measurementSystem": "metric"}, json=body, timeout=(3.0, 5.0))
+    response = self.request(ENDPOINT,
+                            params={"key": self.key, "fields": FIELDS, "vehicleType": "PassengerCar", "measurementSystem": "metric"},
+                            json=body, timeout=(3.0, 5.0))
     response.raise_for_status()
     parsed = self._parse_response(response.json())
     parsed["reference"] = points
@@ -105,7 +121,7 @@ class TomTomMapData:
         ttl = min(86400.0, float(cache_control.split("max-age=", 1)[1].split(",", 1)[0]))
       except ValueError:
         persistent = False
-    parsed["expires"] = time.time() + ttl
+    parsed["expires"] = time.time() + ttl  # noqa: TID251 — persisted expiry requires wall time.
     self.cache.put(key, "snap-v1", parsed, "response-header:" + cache_control[:120], ttl, persistent=persistent)
     return parsed
 
@@ -128,7 +144,8 @@ class TomTomMapData:
     projected_valid = len(projected) >= 2 and all(
       str(point.get("properties", {}).get("snapResult", "")).lower() not in ("", "offroad", "notsnapped", "failed")
       for point in projected)
-    return {"geometry": geometry, "sections": sections, "projectedValid": projected_valid, "fetched": time.time()}
+    return {"geometry": geometry, "sections": sections, "projectedValid": projected_valid,
+            "fetched": time.time()}  # noqa: TID251 — provenance records wall time.
 
   @staticmethod
   def _validate(result, corridor):

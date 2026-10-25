@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 from openpilot.sunnypilot.mapd.live_map_data.corridor import Corridor, closest_progress, fingerprint
@@ -11,9 +9,9 @@ def line(n=8, lon=0.0):
   return [[i * .001, lon] for i in range(n)]
 
 
-def corridor(points=None, continuations=None):
+def corridor(points=None, continuations=None, progress=20, confidence=.9):
   points = points or line()
-  return {"version": 1, "geometry": points, "progressM": 20, "confidence": .9,
+  return {"version": 1, "geometry": points, "progressM": progress, "confidence": confidence,
           "fingerprint": fingerprint(points), "continuations": continuations or []}
 
 
@@ -93,3 +91,21 @@ def test_invalid_corridor_clears_atomically(tmp_path):
   adapter.result = result()
   adapter.update("{}", [0, 0])
   assert adapter.result is None
+
+
+def test_request_window_changes_cache_key_with_progress():
+  first = Corridor.parse(corridor(points=line(20), progress=100)).request_paths()[0]
+  later = Corridor.parse(corridor(points=line(20), progress=900)).request_paths()[0]
+  assert TomTomMapData._cache_key(first) != TomTomMapData._cache_key(later)
+
+
+@pytest.mark.parametrize("raw", [
+  corridor(confidence=.49),
+  corridor(continuations=[{"geometry": [[.007, 0], [.012, 0]]}]),
+])
+def test_unreliable_or_ambiguous_corridor_does_not_request(tmp_path, raw):
+  key_path = tmp_path / "keys"
+  key_path.write_text("TOMTOM_API_KEY=test\n")
+  adapter = TomTomMapData(cache=TomTomCache(str(tmp_path / "c"), "s"), key_path=str(key_path))
+  adapter.update(raw, [0, 0], now=1)
+  assert adapter.future is None

@@ -15,11 +15,12 @@ class TomTomCache:
     self.lock = threading.Lock()
     self.session_id, self.max_entries = session_id, max_entries
     with self.db:
-      self.db.execute("CREATE TABLE IF NOT EXISTS corridors (cache_key TEXT PRIMARY KEY, provider_version TEXT, session_id TEXT, response TEXT, provenance TEXT, fetched REAL, expires REAL)")
+      self.db.execute("CREATE TABLE IF NOT EXISTS corridors (cache_key TEXT PRIMARY KEY, provider_version TEXT, session_id TEXT, " +
+                      "response TEXT, provenance TEXT, fetched REAL, expires REAL)")
       self.db.execute("CREATE TABLE IF NOT EXISTS usage (endpoint TEXT, month TEXT, count INTEGER, PRIMARY KEY(endpoint, month))")
 
   def get(self, key, now=None):
-    now = time.time() if now is None else now
+    now = time.time() if now is None else now  # noqa: TID251 — cache expiry requires wall time across boots.
     with self.lock:
       row = self.db.execute("SELECT response, expires, session_id FROM corridors WHERE cache_key=?", (key,)).fetchone()
     if not row or row[1] <= now or row[2] not in (self.session_id, "persistent"):
@@ -27,7 +28,7 @@ class TomTomCache:
     return json.loads(row[0])
 
   def put(self, key, version, response, provenance, ttl, now=None, persistent=False):
-    now = time.time() if now is None else now
+    now = time.time() if now is None else now  # noqa: TID251 — persisted timestamps require wall time.
     session = "persistent" if persistent else self.session_id
     with self.lock, self.db:
       self.db.execute("INSERT OR REPLACE INTO corridors VALUES (?,?,?,?,?,?,?)",
@@ -35,7 +36,8 @@ class TomTomCache:
       self.db.execute("DELETE FROM corridors WHERE cache_key IN (SELECT cache_key FROM corridors ORDER BY fetched DESC LIMIT -1 OFFSET ?)", (self.max_entries,))
 
   def allow_and_count(self, endpoint, monthly_limit, now=None):
-    month = time.strftime("%Y-%m", time.gmtime(time.time() if now is None else now))
+    wall_time = time.time() if now is None else now  # noqa: TID251 — calendar budgets require wall time.
+    month = time.strftime("%Y-%m", time.gmtime(wall_time))
     with self.lock, self.db:
       row = self.db.execute("SELECT count FROM usage WHERE endpoint=? AND month=?", (endpoint, month)).fetchone()
       count = row[0] if row else 0
