@@ -76,9 +76,9 @@ jobs:
               // Only a whole comment on the first line (after an optional shebang) is accepted.
               const header = content.replace(/^\uFEFF/, "").split(/\r\n|\n|\r/);
               const firstLine = header[header[0]?.startsWith("#!") ? 1 : 0] ?? "";
-              const marker = firstLine.match(/^(?:\/\/ (file-lines-exception: .+)|<!-- (file-lines-exception: .+) -->)$/);
+              const marker = firstLine.match(/^(?:(?:\/\/|#) (file-lines-exception: .+)|<!-- (file-lines-exception: .+) -->)$/);
               const exception = (marker?.[1] ?? marker?.[2] ?? "").match(/^file-lines-exception: max=([1-9]\d*) issue=(https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/issues\/[1-9]\d*)$/);
-              if (/^(?:\/\/|<!--)\s*file-lines-exception:/.test(firstLine)) {
+              if (/^(?:\/\/|#|<!--)\s*file-lines-exception:/.test(firstLine)) {
                 const maximum = Number(exception?.[1]);
                 if (!exception || !Number.isSafeInteger(maximum) || maximum <= MAX_FILE_LINES) {
                   violations.push({ path, lines, reason: "Invalid file-lines-exception: require max > 1000 and a GitHub issue URL." });
