@@ -85,7 +85,8 @@ class TomTomMapData:
         self.result = None
       else:
         progress, lateral = closest_progress(self.result["geometry"], position)
-        if lateral <= 20 and polyline_length(self.result["geometry"]) - progress > 120:
+        if (lateral <= 20 and polyline_length(self.result["geometry"]) - progress > 120 and
+            self._remaining_result_matches_path(self.result["geometry"], paths[0], progress)):
           return
         self.result = None
       self.result_key = None
@@ -102,6 +103,34 @@ class TomTomMapData:
   @staticmethod
   def _cache_key(points):
     return "snap-v1:" + fingerprint(points)
+
+  @staticmethod
+  def _remaining_result_matches_path(result_points, path, progress):
+    """Ensure reusable result coverage still follows the newly selected directed path."""
+    walked = 0.0
+    remaining = []
+    for a, b in zip(result_points, result_points[1:], strict=False):
+      walked += distance_m(a, b)
+      if walked >= progress:
+        remaining.append(b)
+    if not remaining:
+      return False
+    samples = remaining[::max(1, len(remaining) // 10)]
+    if samples[-1] != remaining[-1]:
+      samples.append(remaining[-1])
+    path_length = polyline_length(path)
+    matched_progress = []
+    for sample in samples:
+      sample_progress, lateral = closest_progress(path, sample)
+      if lateral > 25:
+        # The old result may extend one vertex past the moving request window.
+        # Only tolerate unmatched coverage beyond the new path's forward end.
+        if sample_progress >= path_length - 25 and matched_progress:
+          break
+        return False
+      matched_progress.append(sample_progress)
+    return bool(matched_progress) and all(
+      a <= b + 1 for a, b in zip(matched_progress, matched_progress[1:], strict=False))
 
   @staticmethod
   def _persistent_ttl(cache_control):

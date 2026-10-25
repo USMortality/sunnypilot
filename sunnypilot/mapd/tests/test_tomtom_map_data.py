@@ -186,6 +186,21 @@ def test_request_window_change_reuses_active_result_with_remaining_coverage(tmp_
   assert adapter.result_key == adapter._cache_key(first)
 
 
+def test_request_window_change_rejects_result_for_different_continuation(tmp_path):
+  adapter = TomTomMapData(cache=TomTomCache(str(tmp_path / "c"), "s"), key_path=str(tmp_path / "missing"))
+  old_path = line(20)
+  adapter.result = result(old_path)
+  adapter.result_key = adapter._cache_key(old_path)
+  changed = corridor(points=line(10), progress=900, continuations=[
+    {"geometry": [[.009, 0], [.014, .003], [.019, .003]]},
+  ])
+
+  adapter.update(changed, [.009, 0], now=1)
+
+  assert adapter.result is None
+  assert adapter.result_key is None
+
+
 @pytest.mark.parametrize("raw", [
   corridor(confidence=.49),
   corridor(continuations=[
