@@ -52,7 +52,21 @@ jobs:
               timeout: 15_000,
               maxBuffer: 10 * 1024 * 1024,
             });
-            const paths = [...new Set(output.split("\0").filter((path) => SOURCE_FILE.test(path)))].sort();
+            const sourcePaths = [...new Set(output.split("\0").filter((path) => SOURCE_FILE.test(path)))].sort();
+            const attributes = sourcePaths.length
+              ? execFileSync("git", ["check-attr", "-z", "--stdin", "linguist-vendored", "linguist-generated"], {
+                  cwd: repoPath,
+                  encoding: "utf8",
+                  input: `${sourcePaths.join("\0")}\0`,
+                  timeout: 15_000,
+                  maxBuffer: 10 * 1024 * 1024,
+                }).split("\0")
+              : [];
+            const excludedPaths = new Set();
+            for (let index = 0; index + 2 < attributes.length; index += 3) {
+              if (attributes[index + 2] === "set" || attributes[index + 2] === "true") excludedPaths.add(attributes[index]);
+            }
+            const paths = sourcePaths.filter((path) => !excludedPaths.has(path));
             /** @type {Array<{ path: string; lines: number; reason?: string }>} */
             const violations = [];
             /** @type {Array<{ path: string; lines: number; maximum: number; issue: string }>} */
