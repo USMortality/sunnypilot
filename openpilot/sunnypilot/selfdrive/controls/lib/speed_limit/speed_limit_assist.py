@@ -15,8 +15,10 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import PCM_LONG_REQUIRED_MAX_SET_SPEED, CONFIRM_SPEED_THRESHOLD
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import PCM_LONG_REQUIRED_MAX_SET_SPEED, CONFIRM_SPEED_THRESHOLD, \
+  CONFIRM_SPEED_DROP_PERCENTAGE
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.decision_log import kph
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.helpers import compare_cluster_target, set_speed_limit_assist_availability
 
 ButtonType = car.CarState.ButtonEvent.Type
@@ -92,6 +94,10 @@ class SpeedLimitAssist:
     self._plus_hold = 0.
     self._minus_hold = 0.
     self._release_toggle_prev = 0
+    self.decision_reason = "initialized"
+    self.auto_accepted_this_cycle = False
+    self.long_override = False
+    self.suspicious_drop_this_cycle = False
 
     # TODO-SP: SLA's own output_a_target for planner
     # Solution functions mapped to respective states
@@ -161,9 +167,11 @@ class SpeedLimitAssist:
     now = time.monotonic()
     if req_plus and now <= self._plus_hold:
       self._plus_hold = 0.
+      self.decision_reason = "confirmed_with_accel_button"
       return True
     elif req_minus and now <= self._minus_hold:
       self._minus_hold = 0.
+      self.decision_reason = "confirmed_with_decel_button"
       return True
 
     # expired
@@ -191,15 +199,17 @@ class SpeedLimitAssist:
     self.target_set_speed_conv = pcm_long_required_max_set_speed_conv if self.pcm_op_long else self.speed_limit_final_last_conv
 
   @property
-  def apply_confirm_speed_threshold(self) -> bool:
-    # below CST: always require user confirmation
-    if self.v_cruise_cluster_below_confirm_speed_threshold:
-      return True
+  def requires_suspicious_drop_confirmation(self) -> bool:
+    if self.prev_speed_limit_final_last_conv <= 0:
+      return False
 
-    # at/above CST:
-    # - new speed limit >= CST: auto change
-    # - new speed limit < CST: user confirmation required
-    return bool(self.speed_limit_final_last_conv < CONFIRM_SPEED_THRESHOLD[self.is_metric])
+    if self.speed_limit_final_last_conv >= self.prev_speed_limit_final_last_conv:
+      return False
+
+    drop_percentage = ((self.prev_speed_limit_final_last_conv - self.speed_limit_final_last_conv) /
+                       self.prev_speed_limit_final_last_conv) * 100
+
+    return bool(drop_percentage > CONFIRM_SPEED_DROP_PERCENTAGE)
 
   def get_current_acceleration_as_target(self) -> float:
     return self.a_ego
@@ -214,6 +224,7 @@ class SpeedLimitAssist:
     return self.v_offset / float(ModelConstants.T_IDXS[CONTROL_N])
 
   def _update_confirmed_state(self):
+    self.decision_reason = "confirmed_with_set_speed"
     if self._has_speed_limit:
       if self.v_offset < LIMIT_SPEED_OFFSET_TH:
         self.state = SpeedLimitAssistState.adapting
@@ -224,6 +235,7 @@ class SpeedLimitAssist:
 
   def _update_non_pcm_long_confirmed_state(self) -> bool:
     if self.target_set_speed_confirmed:
+      self.decision_reason = "confirmed_with_set_speed"
       return True
 
     if self.state != SpeedLimitAssistState.preActive:
@@ -247,7 +259,7 @@ class SpeedLimitAssist:
         if self.state == SpeedLimitAssistState.active:
           if self.v_cruise_cluster_changed:
             self.state = SpeedLimitAssistState.inactive
-          elif self.speed_limit_changed and self.apply_confirm_speed_threshold:
+          elif self.speed_limit_changed and self.requires_suspicious_drop_confirmation:
             self.state = SpeedLimitAssistState.preActive
             self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
           elif self._has_speed_limit and self.v_offset < LIMIT_SPEED_OFFSET_TH:
@@ -257,7 +269,7 @@ class SpeedLimitAssist:
         elif self.state == SpeedLimitAssistState.adapting:
           if self.v_cruise_cluster_changed:
             self.state = SpeedLimitAssistState.inactive
-          elif self.speed_limit_changed and self.apply_confirm_speed_threshold:
+          elif self.speed_limit_changed and self.requires_suspicious_drop_confirmation:
             self.state = SpeedLimitAssistState.preActive
             self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
           elif self.v_offset >= LIMIT_SPEED_OFFSET_TH:
@@ -267,7 +279,7 @@ class SpeedLimitAssist:
         elif self.state == SpeedLimitAssistState.pending:
           if self.target_set_speed_confirmed:
             self._update_confirmed_state()
-          elif self.speed_limit_changed:
+          elif self.speed_limit_changed and self.requires_suspicious_drop_confirmation:
             self.state = SpeedLimitAssistState.preActive
             self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
 
@@ -319,7 +331,7 @@ class SpeedLimitAssist:
           if self.v_cruise_cluster_changed:
             self.state = SpeedLimitAssistState.inactive
 
-          elif self.speed_limit_changed and self.apply_confirm_speed_threshold:
+          elif self.speed_limit_changed and self.requires_suspicious_drop_confirmation:
             self.state = SpeedLimitAssistState.preActive
             self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
 
@@ -333,7 +345,7 @@ class SpeedLimitAssist:
 
         # INACTIVE
         elif self.state == SpeedLimitAssistState.inactive:
-          if self.speed_limit_changed:
+          if self.speed_limit_changed and self.requires_suspicious_drop_confirmation:
             self.state = SpeedLimitAssistState.preActive
             self.pre_active_timer = int(PRE_ACTIVE_GUARD_PERIOD[self.pcm_op_long] / DT_MDL)
           elif self._update_non_pcm_long_confirmed_state():
@@ -361,27 +373,18 @@ class SpeedLimitAssist:
     return enabled, active
 
   def update_events(self, events_sp: EventsSP) -> None:
-    if self.state == SpeedLimitAssistState.preActive:
+    if self.state == SpeedLimitAssistState.preActive and self._state_prev != SpeedLimitAssistState.preActive:
       events_sp.add(EventNameSP.speedLimitPreActive)
 
     if self.state == SpeedLimitAssistState.pending and self._state_prev != SpeedLimitAssistState.pending:
       events_sp.add(EventNameSP.speedLimitPending)
 
-    if self.is_active:
-      if self._state_prev not in ACTIVE_STATES:
-        self.update_active_event(events_sp)
-
-      # only notify if we acquire a valid speed limit
-      # do not check has_speed_limit here
-      elif self._speed_limit != self.speed_limit_prev:
-        if self.speed_limit_prev <= 0:
-          self.update_active_event(events_sp)
-        elif self.speed_limit_prev > 0 and self._speed_limit > 0:
-          self.update_active_event(events_sp)
-
   def update(self, long_enabled: bool, long_override: bool, v_ego: float, a_ego: float, v_cruise_cluster: float, speed_limit: float,
              speed_limit_final_last: float, has_speed_limit: bool, distance: float, events_sp: EventsSP) -> None:
     self.long_enabled = long_enabled
+    self.long_override = long_override
+    self.auto_accepted_this_cycle = False
+    self.decision_reason = "holding_state"
     self.v_ego = v_ego
     self.a_ego = a_ego
 
@@ -392,12 +395,43 @@ class SpeedLimitAssist:
 
     self.update_params()
     self.update_calculations(v_cruise_cluster)
+    self.suspicious_drop_this_cycle = self.requires_suspicious_drop_confirmation
 
     self._state_prev = self.state
-    if self.pcm_op_long:
+    if (self.long_enabled and not self.long_enabled_prev and self.enabled and not long_override and
+        self.state == SpeedLimitAssistState.disabled and self._speed_limit > 0. and self._distance <= 0.):
+      # Accept a valid current zone once per engagement, without a button confirmation.
+      # A retained last limit or an upcoming limit must follow the ordinary state machine.
+      self._plus_hold = self._minus_hold = 0.
+      if self.pcm_op_long:
+        self._update_confirmed_state()
+      else:
+        self.state = SpeedLimitAssistState.active
+      self.is_enabled, self.is_active = True, True
+      self.auto_accepted_this_cycle = True
+      self.decision_reason = "current_limit_auto_accepted_on_engagement"
+    elif self.pcm_op_long:
       self.is_enabled, self.is_active = self.update_state_machine_pcm_op_long()
     else:
       self.is_enabled, self.is_active = self.update_state_machine_non_pcm_long()
+
+    if self.decision_reason == "holding_state":
+      if not self.enabled:
+        self.decision_reason = "disabled_by_setting_or_vehicle"
+      elif not self.long_enabled:
+        self.decision_reason = "longitudinal_disengaged"
+      elif long_override:
+        self.decision_reason = "driver_override"
+      elif self.state == SpeedLimitAssistState.preActive:
+        self.decision_reason = "suspicious_drop_requires_confirmation" if self.requires_suspicious_drop_confirmation else "awaiting_confirmation"
+      elif self.state == SpeedLimitAssistState.pending:
+        self.decision_reason = "waiting_for_speed_limit_or_set_speed"
+      elif self.state == SpeedLimitAssistState.inactive:
+        self.decision_reason = "confirmation_timeout" if self._state_prev == SpeedLimitAssistState.preActive else "manual_cruise_change_or_inactive"
+      elif self.state == SpeedLimitAssistState.disabled:
+        self.decision_reason = "engagement_guard"
+      elif self._speed_limit <= 0. and self._has_speed_limit:
+        self.decision_reason = "holding_retained_target"
 
     self.update_events(events_sp)
 
@@ -413,3 +447,27 @@ class SpeedLimitAssist:
     self.output_a_target = self.get_a_target_from_control()
 
     self.frame += 1
+
+  def decision_snapshot(self):
+    state_names = {value: name for name, value in SpeedLimitAssistState.schema.enumerants.items()}
+    return {
+      "assist_frame": self.frame,
+      "state_before": state_names[self._state_prev],
+      "state": state_names[self.state],
+      "reason": self.decision_reason,
+      "auto_accepted_on_engagement": self.auto_accepted_this_cycle,
+      "assist_enabled": self.enabled,
+      "longitudinal_enabled": self.long_enabled,
+      "driver_override": self.long_override,
+      "active": self.is_active,
+      "pcm_openpilot_longitudinal": self.pcm_op_long,
+      "has_current_or_retained_limit": self._has_speed_limit,
+      "current_limit_kph": kph(self._speed_limit),
+      "target_kph": kph(self._speed_limit_final_last),
+      "target_distance_m": self._distance,
+      "ego_kph": kph(self.v_ego),
+      "cruise_set_kph": kph(self.v_cruise_cluster),
+      "confirmation_set_speed": self.target_set_speed_conv,
+      "confirmation_set_speed_unit": "km/h" if self.is_metric else "mph",
+      "suspicious_drop_confirmation": self.suspicious_drop_this_cycle,
+    }

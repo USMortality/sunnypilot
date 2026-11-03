@@ -17,6 +17,24 @@ from openpilot.sunnypilot.livedelay.helpers import get_lat_delay
 from openpilot.sunnypilot.modeld_v2.modeld_base import ModelStateBase
 from openpilot.sunnypilot.selfdrive.controls.lib.blinker_pause_lateral import BlinkerPauseLateral
 from openpilot.sunnypilot.selfdrive.controls.lib.latcontrol_torque_v0 import LatControlTorque as LatControlTorqueV0
+from openpilot.sunnypilot.selfdrive.controls.lib.lead_coast import LeadCoastGap
+from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import lead_coast_min_distance
+
+
+def longitudinal_plan_sp_idle_active(sm: messaging.SubMaster) -> bool:
+  try:
+    if not sm.all_checks(['longitudinalPlanSP', 'longitudinalPlan', 'radarState']):
+      return False
+    # controlsd publishes controlsState, so it cannot read forceDecel from its
+    # SubMaster. Use the same inputs as the published forceDecel calculation.
+    force_decel = (sm['driverMonitoringState'].noResponseForceDecel or
+                   sm['selfdriveState'].state == log.SelfdriveState.OpenpilotState.softDisabling)
+    assist = sm['longitudinalPlanSP'].speedLimit.assist
+    return bool(assist.longitudinalIdle and LeadCoastGap.valid_saved_time_gaps(assist.leadCoastTimeGaps) and
+                not sm['longitudinalPlan'].shouldStop and not sm['longitudinalPlan'].fcw and
+                not force_decel and not sm['carState'].gasPressed and not sm['carState'].brakePressed)
+  except (AttributeError, KeyError):
+    return False
 
 
 class ControlsExt(ModelStateBase):
@@ -31,7 +49,7 @@ class ControlsExt(ModelStateBase):
     self.CP_SP = messaging.log_from_bytes(params.get("CarParamsSP", block=True), custom.CarParamsSP)
     cloudlog.info("controlsd_ext got CarParamsSP")
 
-    self.sm_services_ext = ['radarState', 'selfdriveStateSP']
+    self.sm_services_ext = ['radarState', 'selfdriveStateSP', 'longitudinalPlanSP']
     self.pm_services_ext = ['carControlSP']
 
   def initialize_lateral_control(self, lac, CI, dt):
@@ -103,6 +121,9 @@ class ControlsExt(ModelStateBase):
     CC_SP.intelligentCruiseButtonManagement.state = icbm_src.state
     CC_SP.intelligentCruiseButtonManagement.sendButton = icbm_src.sendButton
     CC_SP.intelligentCruiseButtonManagement.vTarget = icbm_src.vTarget
+    CC_SP.longitudinalIdle = longitudinal_plan_sp_idle_active(sm)
+    CC_SP.leadCoastTimeGaps = list(sm['longitudinalPlanSP'].speedLimit.assist.leadCoastTimeGaps) if CC_SP.longitudinalIdle else []
+    CC_SP.leadCoastMinDistance = lead_coast_min_distance(sm['carState'].vEgo, sm['selfdriveState'].personality)
 
     return CC_SP
 

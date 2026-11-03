@@ -12,8 +12,10 @@ from opendbc.car import structs
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.sunnypilot.selfdrive.car.intelligent_cruise_button_management.helpers import get_minimum_set_speed
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode as SpeedLimitMode
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import ACTIVE_STATES as SLA_ACTIVE_STATES
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.helpers import compare_cluster_target
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.decision_log import SpeedLimitDecisionLogger
 
 ButtonType = car.CarState.ButtonEvent.Type
 SpeedLimitAssistState = custom.LongitudinalPlanSP.SpeedLimit.AssistState
@@ -46,6 +48,7 @@ class VCruiseHelperSP:
     self.v_cruise_kph = V_CRUISE_UNSET
     self.v_cruise_cluster_kph = V_CRUISE_UNSET
     self.params = Params()
+    self.decision_logger = SpeedLimitDecisionLogger()
     self.v_cruise_min = 0
     self.enabled_prev = False
 
@@ -116,6 +119,10 @@ class VCruiseHelperSP:
     self.sla_state = LP_SP.speedLimit.assist.state
     self.req_plus, self.req_minus = compare_cluster_target(self.v_cruise_cluster_kph * CV.KPH_TO_MS,
                                                            self.speed_limit_final_last, is_metric)
+
+  @property
+  def speed_limit_assist_enabled(self) -> bool:
+    return self.params.get("SpeedLimitMode", return_default=True) == SpeedLimitMode.assist
 
   @property
   def update_speed_limit_final_last_changed(self) -> bool:

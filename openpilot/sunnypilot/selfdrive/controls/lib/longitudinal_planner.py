@@ -5,18 +5,125 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 
-from openpilot.cereal import messaging, custom
+from openpilot.cereal import messaging, custom, log
 from opendbc.car import structs
 from openpilot.common.constants import CV
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
 from openpilot.sunnypilot.selfdrive.controls.lib.e2e_alerts_helper import E2EAlertsHelper
 from openpilot.sunnypilot.selfdrive.controls.lib.smart_cruise_control.smart_cruise_control import SmartCruiseControl
-from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import SpeedLimitAssist
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_assist import SpeedLimitAssist, SpeedLimitAssistState
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.speed_limit_resolver import SpeedLimitResolver
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.decision_log import SpeedLimitDecisionLogger, kph
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 from openpilot.sunnypilot.models.helpers import get_active_bundle
 
 LongitudinalPlanSource = custom.LongitudinalPlanSP.LongitudinalPlanSource
+
+SPEED_LIMIT_APPROACH_SHAPE = 1.5
+# Coasting behind a lead becomes eligible just inside the personality's own
+# steady-state gap, so a lead at normal following distance still qualifies.
+LEAD_COAST_FOLLOW_FACTOR = 0.95
+
+
+def lead_coast_min_distance(v_ego: float, personality) -> float:
+  if personality == log.LongitudinalPersonality.relaxed:
+    follow_time = 2.5
+  elif personality == log.LongitudinalPersonality.standard:
+    follow_time = 2.0
+  elif personality == log.LongitudinalPersonality.moderate:
+    follow_time = 1.5
+  elif personality == log.LongitudinalPersonality.aggressive:
+    follow_time = 1.0
+  else:
+    raise NotImplementedError("Longitudinal personality not supported")
+  return max(6., LEAD_COAST_FOLLOW_FACTOR * follow_time * max(v_ego, 0.))
+
+
+class SpeedLimitApproach:
+  """Release once per target; speed noise must never re-arm the override."""
+  def __init__(self):
+    self.target = 0.
+    self.released = False
+
+  def update(self, active: bool, target: float, v_ego: float, release_gap: float, cancel: bool = False) -> bool:
+    if not active or target <= 0.:
+      self.target = 0.
+      self.released = False
+      return False
+    if abs(target - self.target) > 0.1 * CV.KPH_TO_MS:
+      self.target = target
+      self.released = False
+    self.released |= cancel or v_ego <= target + release_gap
+    return not self.released
+
+
+def speed_limit_approach_allowed(assist_active: bool, lower_lookahead_active: bool, source,
+                                 cruise_target: float, approach_target: float, current_limit_decel: bool = False) -> bool:
+  # The present limit can tie cruise, so an active SLC session need not be the
+  # planner's winning source. Never override a lower cruise or SCC target.
+  return (assist_active and lower_lookahead_active and not current_limit_decel and
+          source in (LongitudinalPlanSource.cruise, LongitudinalPlanSource.speedLimitAssist) and
+          0. < approach_target < cruise_target)
+
+
+def speed_limit_no_brake_active(enabled: bool, lower_lookahead_active: bool, has_lead: bool) -> bool:
+  return enabled and lower_lookahead_active and not has_lead
+
+
+def limit_speed_limit_decel_target(a_target: float, speed_limit_source_active: bool, has_lead: bool, max_decel: float) -> float:
+  if speed_limit_source_active and not has_lead:
+    return max(a_target, max_decel)
+  return a_target
+
+
+def speed_limit_idle_active(v_ego: float, speed_limit_target: float, release_gap: float, mode: str) -> bool:
+  return mode == "idle" and speed_limit_target > 0. and v_ego > speed_limit_target + release_gap
+
+
+def no_lead_normal_decel_idle_active(mode: str, intentional_decel: bool, cruise_source_active: bool,
+                                     a_target: float, min_idle_decel: float, has_lead: bool, should_stop: bool,
+                                     lead_coast_allowed: bool = False) -> bool:
+  return (mode == "idle" and intentional_decel and cruise_source_active and a_target <= min_idle_decel and
+          (not has_lead or lead_coast_allowed) and not should_stop)
+
+
+def speed_limit_current_limit_decel_needed(speed_limit_source_active: bool,
+                                           v_ego: float, speed_limit_target: float, overspeed_margin: float = 0.) -> bool:
+  return speed_limit_source_active and speed_limit_target > 0. and \
+    v_ego > speed_limit_target + overspeed_margin
+
+
+def speed_limit_approach_accel(v_ego: float, v_target: float, distance: float, lookahead_speed_factor: float,
+                               accel_coast: float, min_accel: float, max_accel: float = 0.0) -> float:
+  coast_accel = max(min(accel_coast, max_accel), min_accel)
+  if v_target <= 0. or distance <= 0. or v_ego <= v_target:
+    return coast_accel
+
+  required_accel = (v_target ** 2 - v_ego ** 2) / max(2.0 * distance, 1.0)
+  if required_accel >= coast_accel:
+    return coast_accel
+  if required_accel <= min_accel:
+    return min_accel
+
+  lookahead_distance = max(v_ego, v_target) * CV.MS_TO_KPH * lookahead_speed_factor
+  progress = 1.0 - distance / max(lookahead_distance, distance, 1.0)
+  urgency = max(min(progress, 1.0), 0.0) ** SPEED_LIMIT_APPROACH_SHAPE
+  target_accel = min(required_accel, coast_accel + urgency * (min_accel - coast_accel))
+  return max(min(target_accel, coast_accel), min_accel)
+
+
+def speed_limit_no_brake_accel_target(v_ego: float, speed_limit_target: float, release_gap: float, no_brake_accel: float,
+                                      mode: str = "fixed", distance: float = 0., lookahead_speed_factor: float = 0.,
+                                      accel_coast: float | None = None, min_accel: float = -1.2) -> float:
+  if speed_limit_target > 0. and v_ego <= speed_limit_target + release_gap:
+    return 0.
+  if mode == "idle":
+    return 0.
+  if mode == "dynamic":
+    approach_accel = speed_limit_approach_accel(v_ego, speed_limit_target, distance, lookahead_speed_factor,
+                                                accel_coast if accel_coast is not None else no_brake_accel, min_accel)
+    return approach_accel
+  return no_brake_accel
 
 
 class LongitudinalPlannerSP:
@@ -24,7 +131,6 @@ class LongitudinalPlannerSP:
     self.events_sp = EventsSP()
     self.resolver = SpeedLimitResolver()
     self.scc = SmartCruiseControl()
-    self.resolver = SpeedLimitResolver()
     self.sla = SpeedLimitAssist(CP, CP_SP)
     self.generation = int(model_bundle.generation) if (model_bundle := get_active_bundle()) else None
     self.source = LongitudinalPlanSource.cruise
@@ -32,20 +138,23 @@ class LongitudinalPlannerSP:
 
     self.output_v_target = 0.
     self.output_a_target = 0.
+    self.decision_logger = SpeedLimitDecisionLogger()
 
   def update_targets(self, sm: messaging.SubMaster, v_ego: float, a_ego: float, v_cruise: float) -> tuple[float, float]:
     CS = sm['carState']
     v_cruise_cluster_kph = min(CS.vCruiseCluster, V_CRUISE_MAX)
     v_cruise_cluster = v_cruise_cluster_kph * CV.KPH_TO_MS
 
-    long_enabled = sm['carControl'].enabled
+    long_enabled = (sm['carControl'].longActive if self.sla.CP.openpilotLongitudinalControl else
+                    sm['carControl'].enabled and CS.cruiseState.enabled)
     long_override = sm['carControl'].cruiseControl.override
 
     # Smart Cruise Control
     self.scc.update(sm, long_enabled, long_override, v_ego, a_ego, v_cruise)
 
     # Speed Limit Resolver
-    self.resolver.update(v_ego, sm)
+    current_only = self.sla.enabled and long_enabled and not self.sla.long_enabled_prev and not long_override
+    self.resolver.update(v_ego, sm, current_only=current_only)
 
     # Speed Limit Assist
     has_speed_limit = self.resolver.speed_limit_valid or self.resolver.speed_limit_last_valid
@@ -61,7 +170,37 @@ class LongitudinalPlannerSP:
 
     self.source = min(targets, key=lambda k: targets[k][0])
     self.output_v_target, self.output_a_target = targets[self.source]
+    self._log_speed_limit_application(v_cruise)
     return self.output_v_target, self.output_a_target
+
+  def _log_speed_limit_application(self, v_cruise):
+    # Existing test/replay planners may be constructed without __init__.
+    logger = getattr(self, "decision_logger", None)
+    if logger is None:
+      return
+
+    def snapshot():
+      names = {value: name for name, value in LongitudinalPlanSource.schema.enumerants.items()}
+      return {
+        **self.resolver.decision_context,
+        "resolver_decision_mono_time_ns": getattr(self.resolver, "last_decision_event_ns", None),
+        **self.sla.decision_snapshot(),
+        "planner_source": names[self.source],
+        "planner_target_kph": kph(self.output_v_target),
+        "cruise_target_kph": kph(v_cruise),
+        "slc_controls_target": bool(self.sla.long_enabled and not self.sla.long_override and self.source == LongitudinalPlanSource.speedLimitAssist),
+        "planner_selection_rule": "lowest_candidate_target",
+        "e2e_longitudinal_enabled": getattr(self, "longitudinal_e2e_enabled", True),
+      }
+
+    def key():
+      return (self.source, self.sla.state, self.sla.enabled, self.sla.long_enabled, self.sla.long_override,
+              self.sla.decision_reason, kph(self.resolver.speed_limit_final_last), kph(v_cruise),
+              getattr(self, "longitudinal_e2e_enabled", True))
+    critical_transition = self.sla.state != self.sla._state_prev and (
+      self.sla.state in (SpeedLimitAssistState.preActive, SpeedLimitAssistState.disabled) or
+      self.sla._state_prev == SpeedLimitAssistState.preActive or self.sla.decision_reason.startswith("confirmed_"))
+    logger.log("slc_application", key, snapshot, force=self.sla.auto_accepted_this_cycle or critical_transition)
 
   def update(self, sm: messaging.SubMaster) -> None:
     self.events_sp.clear()
@@ -115,6 +254,11 @@ class LongitudinalPlannerSP:
     assist.active = self.sla.is_active
     assist.vTarget = float(self.sla.output_v_target)
     assist.aTarget = float(self.sla.output_a_target)
+    assist.longitudinalIdle = bool(getattr(self, "longitudinal_idle", False))
+    lead_coast_time_gaps = self.coast_lead_gap.saved_time_gaps if assist.longitudinalIdle else []
+    if lead_coast_time_gaps and len(lead_coast_time_gaps) != 2:
+      lead_coast_time_gaps = []
+    assist.leadCoastTimeGaps = lead_coast_time_gaps
 
     # E2E Alerts
     e2eAlerts = longitudinalPlanSP.e2eAlerts

@@ -22,7 +22,7 @@ from openpilot.selfdrive.controls.lib.longcontrol import LongControl
 from openpilot.selfdrive.modeld.modeld import LAT_SMOOTH_SECONDS
 from openpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 
-from openpilot.sunnypilot.selfdrive.controls.controlsd_ext import ControlsExt
+from openpilot.sunnypilot.selfdrive.controls.controlsd_ext import ControlsExt, longitudinal_plan_sp_idle_active
 from openpilot.selfdrive.controls.lib.longitudinal_personality import personality_to_gap_bars
 
 State = log.SelfdriveState.OpenpilotState
@@ -30,7 +30,6 @@ LaneChangeState = log.LaneChangeState
 LaneChangeDirection = log.LaneChangeDirection
 
 ACTUATOR_FIELDS = tuple(car.CarControl.Actuators.schema.fields.keys())
-
 
 class Controls(ControlsExt):
   def __init__(self) -> None:
@@ -136,7 +135,12 @@ class Controls(ControlsExt):
 
     # accel PID loop
     pid_accel_limits = self.CI.get_pid_accel_limits(self.CP, self.CP_SP, CS.vEgo, CS.vCruise * CV.KPH_TO_MS)
+    idle_active = CC.longActive and longitudinal_plan_sp_idle_active(self.sm)
     actuators.accel = float(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits))
+    if idle_active:
+      self.LoC.reset()
+      actuators.accel = 0.
+      self.LoC.last_output_accel = 0.
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage

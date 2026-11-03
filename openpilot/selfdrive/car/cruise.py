@@ -4,6 +4,7 @@ import numpy as np
 from opendbc.car.structs import car
 from openpilot.common.constants import CV
 from openpilot.sunnypilot.selfdrive.car.cruise_ext import VCruiseHelperSP
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.decision_log import kph
 
 
 # WARNING: this value was determined based on the model's training distribution,
@@ -113,8 +114,24 @@ class VCruiseHelper(VCruiseHelperSP):
     if self.update_speed_limit_assist_pre_active_confirmed(button_type):
       return
 
+    button_long_press = long_press
     long_press, v_cruise_delta = VCruiseHelperSP.update_v_cruise_delta(self, long_press, v_cruise_delta)
-    if long_press and self.v_cruise_kph % v_cruise_delta != 0:  # partial interval
+    v_cruise_old = self.v_cruise_kph
+    slc_target = self.speed_limit_final_last_kph
+    snap_tolerance = 0.05
+
+    # When the SLC target sits close to a normal cruise step, visit the target first.
+    slc_target_is_current = self.speed_limit_assist_enabled and self.has_speed_limit and abs(self.v_cruise_kph - slc_target) <= snap_tolerance
+    nearest_slc_step = (CRUISE_NEAREST_FUNC[button_type](slc_target / v_cruise_delta) * v_cruise_delta
+                        if v_cruise_delta > 0 else slc_target)
+    slc_target_replaces_step = not button_long_press and slc_target_is_current
+
+    if slc_target_replaces_step:
+      # Very close targets replace the adjacent normal step; otherwise visit
+      # that step next after leaving the exact SLC target.
+      skip_replaced_step = abs(slc_target - nearest_slc_step) < v_cruise_delta / 4.
+      self.v_cruise_kph = nearest_slc_step + (v_cruise_delta * CRUISE_INTERVAL_SIGN[button_type] if skip_replaced_step else 0.)
+    elif long_press and self.v_cruise_kph % v_cruise_delta != 0:  # partial interval
       self.v_cruise_kph = CRUISE_NEAREST_FUNC[button_type](self.v_cruise_kph / v_cruise_delta) * v_cruise_delta
     else:
       self.v_cruise_kph += v_cruise_delta * CRUISE_INTERVAL_SIGN[button_type]
@@ -122,6 +139,23 @@ class VCruiseHelper(VCruiseHelperSP):
     # If set is pressed while overriding, clip cruise speed to minimum of vEgo
     if CS.gasPressed and button_type in (ButtonType.decelCruise, ButtonType.setCruise):
       self.v_cruise_kph = max(self.v_cruise_kph, CS.vEgo * CV.MS_TO_KPH)
+
+    if self.speed_limit_assist_enabled and self.has_speed_limit:
+      snap_to_target = False
+
+      if button_type == ButtonType.accelCruise and v_cruise_old < slc_target < self.v_cruise_kph and abs(v_cruise_old - slc_target) > snap_tolerance:
+        snap_to_target = True
+      elif button_type == ButtonType.decelCruise and v_cruise_old > slc_target > self.v_cruise_kph and abs(v_cruise_old - slc_target) > snap_tolerance:
+        snap_to_target = True
+      elif not button_long_press and button_type == ButtonType.accelCruise and v_cruise_old < self.v_cruise_kph < slc_target and \
+          slc_target - self.v_cruise_kph < v_cruise_delta / 3.:
+        snap_to_target = True
+      elif not button_long_press and button_type == ButtonType.decelCruise and v_cruise_old > self.v_cruise_kph > slc_target and \
+          self.v_cruise_kph - slc_target < v_cruise_delta / 3.:
+        snap_to_target = True
+
+      if snap_to_target:
+        self.v_cruise_kph = slc_target
 
     self.v_cruise_kph = np.clip(round(self.v_cruise_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
 
@@ -140,11 +174,33 @@ class VCruiseHelper(VCruiseHelperSP):
   def initialize_v_cruise(self, CS, initial_speed: int) -> None:
     # initializing is handled by the PCM
     if self.CP.pcmCruise:
+      self._log_initial_cruise(CS, initial_speed, "factory_cruise_owns_initialization")
       return
 
     if any(b.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for b in CS.buttonEvents) and self.v_cruise_initialized:
       self.v_cruise_kph = self.v_cruise_kph_last
+      reason = "resume_previous_cruise_setting"
     else:
       self.v_cruise_kph = int(round(np.clip(max(CS.vEgo * CV.MS_TO_KPH, initial_speed), V_CRUISE_INITIAL, V_CRUISE_MAX)))
+      reason = "ego_or_configured_initial_speed"
 
     self.v_cruise_cluster_kph = self.v_cruise_kph
+    self._log_initial_cruise(CS, initial_speed, reason)
+
+  def _log_initial_cruise(self, CS, initial_speed, reason):
+    logger = getattr(self, "decision_logger", None)
+    if logger is None:
+      return
+    logger.log("slc_cruise_initialization", reason, lambda: {
+      "reason": reason,
+      "ego_kph": kph(CS.vEgo),
+      "configured_initial_kph": initial_speed,
+      "software_initial_min_kph": V_CRUISE_INITIAL,
+      "cruise_setting_kph": float(self.v_cruise_kph) if self.v_cruise_initialized else None,
+      "factory_cruise_reported_kph": kph(CS.cruiseState.speed) if CS.cruiseState.speed >= 0 else None,
+      "factory_cruise": self.CP.pcmCruise,
+      "pcm_cruise_speed": self.CP_SP.pcmCruiseSpeed,
+      "slc_enabled": self.speed_limit_assist_enabled,
+      "slc_target_kph": self.speed_limit_final_last_kph if self.has_speed_limit else None,
+      "buttons": [str(button.type) for button in CS.buttonEvents],
+    }, force=True)

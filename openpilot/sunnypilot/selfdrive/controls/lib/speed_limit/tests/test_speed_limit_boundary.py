@@ -1,0 +1,106 @@
+"""Exercise current-limit enforcement and the separate coast target together."""
+from types import SimpleNamespace as NS
+
+import pytest
+
+from openpilot.common.params import Params
+from openpilot.selfdrive.car.cruise import V_CRUISE_UNSET
+from openpilot.sunnypilot.selfdrive.controls.lib import longitudinal_planner as planner_module
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import speed_limit_assist as assist_module
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import speed_limit_resolver as resolver_module
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Policy, OffsetType
+from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
+
+
+@pytest.fixture
+def boundary_planner(tmp_path, monkeypatch):
+  params = Params(str(tmp_path))
+  for key, value in {"SpeedLimitMode": 3, "SpeedLimitPolicy": 1, "SpeedLimitOffsetType": 0, "SpeedLimitValueOffset": 0}.items():
+    params.put(key, value, block=True)
+  params.put_bool("IsMetric", True, block=True)
+  for module in (resolver_module, assist_module):
+    monkeypatch.setattr(module, 'Params', lambda: params)
+    monkeypatch.setattr(module, 'time', NS(monotonic=lambda: clock[0]))
+  clock = [100.]
+  planner = planner_module.LongitudinalPlannerSP.__new__(planner_module.LongitudinalPlannerSP)
+  planner.resolver = resolver_module.SpeedLimitResolver()
+  planner.resolver.update_params = lambda: None
+  planner.resolver.policy = Policy.map_data_only
+  planner.resolver.offset_type = OffsetType.off
+  planner.resolver.lookahead_lower_limits = True
+  planner.resolver.lookahead_speed_factor_down = 4.
+  planner.resolver.lookahead_speed_factor_up = 4.
+  planner.sla = assist_module.SpeedLimitAssist(NS(brand='hyundai', openpilotLongitudinalControl=True, pcmCruise=False), NS(pcmCruiseSpeed=False))
+  planner.events_sp = EventsSP()
+  unavailable = NS(output_v_target=V_CRUISE_UNSET, output_a_target=0.)
+  planner.scc = NS(update=lambda *args: None, vision=unavailable, map=unavailable)
+  class Messages(dict):
+    logMonoTime = {}
+  sm = Messages(carState=NS(vCruiseCluster=108.), carStateSP=NS(speedLimit=0.),
+                carControl=NS(longActive=True, cruiseControl=NS(override=False)),
+                liveMapDataSP=NS(speedLimit=30., speedLimitValid=True, speedLimitAhead=20., speedLimitAheadValid=True,
+                                 speedLimitAheadDistance=150.))
+  sm.logMonoTime = {}
+  def observe(second, distance, current=30., upcoming=20., cruise=30.):
+    clock[0] = second
+    sm.logMonoTime['liveMapDataSP'] = int(second * 1e9) - 1
+    sm['liveMapDataSP'].speedLimit = current
+    sm['liveMapDataSP'].speedLimitAhead = upcoming
+    sm['liveMapDataSP'].speedLimitAheadValid = upcoming > 0.
+    sm['liveMapDataSP'].speedLimitAheadDistance = distance
+    return planner.update_targets(sm, 30., 0., cruise)[0]
+  return planner, observe
+
+
+def test_lower_approach_coasts_without_enforcing_until_boundary(boundary_planner):
+  planner, observe = boundary_planner
+  assert observe(100., 150.) == 30.
+  assert observe(101., 120.) == 30.
+  assert observe(102., 90.) == 30.
+  resolver = planner.resolver
+  assert planner.sla.is_active
+  assert resolver.lower_lookahead_active
+  assert resolver.approach_speed_limit_final == 20.
+  assert resolver.speed_limit_final_last == 30.
+  # A tie with cruise must still allow the idle/N approach.
+  assert planner.source == planner_module.LongitudinalPlanSource.cruise
+  allowed = planner_module.speed_limit_approach_allowed(planner.sla.is_active, resolver.lower_lookahead_active,
+                                                       planner.source, planner.output_v_target, resolver.approach_speed_limit_final)
+  assert allowed
+  approach = planner_module.SpeedLimitApproach()
+  assert approach.update(allowed, resolver.approach_speed_limit_final, 30., 1.)
+  assert planner_module.speed_limit_idle_active(30., resolver.approach_speed_limit_final, 1., 'idle')
+  assert not approach.update(allowed, resolver.approach_speed_limit_final, 21., 1.)
+  assert observe(103., 0., current=20., upcoming=0.) == 20.
+  assert not resolver.lower_lookahead_active
+  assert resolver.approach_speed_limit_final == 0.
+
+
+def test_higher_limit_never_accelerates_before_current_map_transition(boundary_planner):
+  planner, observe = boundary_planner
+  for second, distance in [(100., 90.), (101., 60.), (102., 30.), (103., 0.)]:
+    assert observe(second, distance, current=20., upcoming=30.) == 20.
+    assert not planner.resolver.lower_lookahead_active
+  assert observe(104., 0., current=30., upcoming=0.) == 30.
+
+
+def test_disappearing_upcoming_limit_does_not_change_assist_target(boundary_planner):
+  planner, observe = boundary_planner
+  for second, distance in [(100., 150.), (101., 120.), (102., 90.)]:
+    assert observe(second, distance) == 30.
+  assert planner.resolver.lower_lookahead_active
+  assert observe(103., 0., upcoming=0.) == 30.
+  assert not planner.resolver.lower_lookahead_active
+  assert planner.resolver.approach_distance == 0.
+
+
+@pytest.mark.parametrize('assist,source,cruise,current_decel', [
+  (False, 'cruise', 30., False),
+  (True, 'sccVision', 30., False),
+  (True, 'sccMap', 30., False),
+  (True, 'cruise', 15., False),
+  (True, 'cruise', 30., True),
+])
+def test_approach_cannot_override_other_controls(assist, source, cruise, current_decel):
+  assert not planner_module.speed_limit_approach_allowed(assist, True, getattr(planner_module.LongitudinalPlanSource, source),
+                                                        cruise, 20., current_decel)
