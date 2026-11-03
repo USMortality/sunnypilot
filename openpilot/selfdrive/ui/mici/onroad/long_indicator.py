@@ -1,6 +1,7 @@
 import pyray as rl
 from openpilot.cereal import log
 from openpilot.common.filter_simple import FirstOrderFilter
+from openpilot.selfdrive.controls.lib.longitudinal_personality import personality_to_gap_bars
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.system.ui.lib.application import gui_app
 from openpilot.system.ui.widgets import Widget
@@ -14,12 +15,13 @@ class LongIndicator(Widget):
     self._txt_lead_car = (self._texture('car', 35, 27), self._texture('car_green', 50, 42))
     self._txt_distance = [(self._texture('distance_1', 32, 7), self._texture('distance_1_green', 60, 35)),
                           (self._texture('distance_2', 40, 9), self._texture('distance_2_green', 68, 37)),
-                          (self._texture('distance_3', 48, 11), self._texture('distance_3_green', 76, 39))]
+                          (self._texture('distance_3', 48, 11), self._texture('distance_3_green', 76, 39)),
+                          (self._texture('distance_3', 56, 13), self._texture('distance_3_green', 84, 41))]
     self._alpha_filter = FirstOrderFilter(0.0, 0.05, 1 / gui_app.target_fps)
     # crossfade between states, a white and a green filter per icon
     self._lead_car_filters = (FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps), FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps))
     self._distance_filters = [(FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps), FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps))
-                              for _ in range(3)]
+                              for _ in self._txt_distance]
     self._personality: int | None = None
     self._personality_changed_time = -HIGHLIGHT_TIME
     self._should_draw = False
@@ -75,8 +77,8 @@ class LongIndicator(Widget):
     overriding = any(e.name == log.OnroadEvent.EventName.gasPressedOverride for e in sm['onroadEvents'])
     blink = 0.35 / 0.9 if overriding and now % 0.375 > 0.1875 else 1.0
 
-    count = personality + 1
-    for i, ((white, green), y, (active_f, green_f)) in enumerate(zip(self._txt_distance, (122, 136, 152), self._distance_filters, strict=True)):
+    count = personality_to_gap_bars(personality)
+    for i, ((white, green), y, (active_f, green_f)) in enumerate(zip(self._txt_distance, (122, 136, 152, 170), self._distance_filters, strict=True)):
       active = active_f.update(float(i < count))
       green_alpha = green_f.update(float(highlight and i == count - 1))
       # only lit bars blink on override
