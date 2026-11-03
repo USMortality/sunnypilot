@@ -104,7 +104,7 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewSP):
     self._draw_border(rect)
 
   def _handle_mouse_press(self, _):
-    if self._click_callback is not None:
+    if not self._hud_renderer.user_interacting() and self._click_callback is not None:
       self._click_callback()
 
   def _handle_mouse_release(self, _):

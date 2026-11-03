@@ -2,6 +2,8 @@ from openpilot.cereal import log
 from openpilot.selfdrive.controls.lib.longitudinal_personality import LONGITUDINAL_PERSONALITY_ORDER, LONGITUDINAL_PERSONALITY_TO_BUTTON
 from openpilot.common.params import Params, UnknownKeyName
 from openpilot.system.ui.widgets import Widget
+from openpilot.system.ui.widgets.confirm_dialog import alert_dialog
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.slc_config import get_longitudinal_e2e_enabled, set_longitudinal_e2e_enabled
 from openpilot.system.ui.widgets.list_view import ListItem, multiple_button_item, toggle_item
 from openpilot.system.ui.widgets.scroller_tici import Scroller
 from openpilot.system.ui.lib.application import gui_app
@@ -102,6 +104,13 @@ class TogglesLayout(Widget):
       icon="speed_limit.png"
     )
 
+    self._experimental_toggle = toggle_item(
+      lambda: tr("Experimental Mode"),
+      lambda: tr("Let the driving model control gas and brakes, including stopping for red lights and stop signs. " +
+                 "Set speed is an upper bound. Turn off to use cruise and speed-limit control for speed selection. " +
+                 "Changes apply within a few seconds."),
+      get_longitudinal_e2e_enabled(), callback=self._on_experimental_mode_toggle, icon="experimental_white.png",
+    )
     self._toggles = {}
     self._initial_cruise_speed = ListItem(
       title=lambda: tr("Initial Max Speed"),
@@ -138,6 +147,8 @@ class TogglesLayout(Widget):
         self._locked_toggles.add(param)
 
       self._toggles[param] = toggle
+      if param == "OpenpilotEnabledToggle":
+        self._toggles["LongitudinalE2EEnabled"] = self._experimental_toggle
 
       # insert longitudinal personality after NDOG toggle
       if param == "DisengageOnAccelerator":
@@ -163,6 +174,8 @@ class TogglesLayout(Widget):
   def _update_toggles(self):
     ui_state.update_params()
     self._initial_cruise_speed.action_item.refresh()
+    self._experimental_toggle.action_item.set_state(get_longitudinal_e2e_enabled())
+    self._experimental_toggle.action_item.set_enabled(ui_state.CP is None or ui_state.has_longitudinal_control)
 
     if ui_state.CP is not None:
       self._long_personality_setting.action_item.set_enabled(ui_state.has_longitudinal_control)
@@ -179,6 +192,13 @@ class TogglesLayout(Widget):
 
   def _render(self, rect):
     self._scroller.render(rect)
+
+  def _on_experimental_mode_toggle(self, state: bool):
+    try:
+      set_longitudinal_e2e_enabled(state)
+    except (OSError, ValueError):
+      self._experimental_toggle.action_item.set_state(get_longitudinal_e2e_enabled())
+      gui_app.push_widget(alert_dialog(tr("Unable to save Experimental Mode. Please try again.")))
 
   def _toggle_callback(self, state: bool, param: str):
     self._params.put_bool(param, state, block=True)

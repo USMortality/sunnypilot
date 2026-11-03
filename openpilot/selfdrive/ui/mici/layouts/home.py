@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import math
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.slc_config import get_longitudinal_e2e_enabled, set_longitudinal_e2e_enabled
 
 from openpilot.cereal import log
 import pyray as rl
@@ -126,6 +127,8 @@ class MiciHomeLayout(Widget):
     self._on_alerts_click: Callable | None = None
     self._alert_count_callback: Callable[[], int] | None = None
 
+    self.set_long_press_callback(self._toggle_experimental_mode)
+    self._experimental_icon = IconWidget("icons_mici/experimental_mode.png", (48, 48))
     self._version_text = self._get_version_text()
 
     self._usb_icon = IconWidget("icons_mici/usb.png", (62, 40))
@@ -140,6 +143,7 @@ class MiciHomeLayout(Widget):
     self._status_bar_layout = HBoxLayout([
       IconWidget("icons_mici/settings.png", (48, 48), opacity=0.9),
       NetworkIcon(),
+      self._experimental_icon,
       self._usb_icon,
       self._chestnut_icon,
       self._chestnut_loading_icon,
@@ -154,6 +158,14 @@ class MiciHomeLayout(Widget):
     self._date_label = UnifiedLabel("", font_size=36, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
     self._branch_label = UnifiedLabel("", font_size=36, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, scroll=True)
     self._version_commit_label = UnifiedLabel("", font_size=36, text_color=rl.GRAY, font_weight=FontWeight.ROMAN, max_width=480, wrap_text=False)
+
+  def _toggle_experimental_mode(self):
+    if ui_state.has_longitudinal_control:
+      try:
+        set_longitudinal_e2e_enabled(not get_longitudinal_e2e_enabled())
+      except (OSError, ValueError):
+        from openpilot.selfdrive.ui.mici.widgets.dialog import BigDialog
+        gui_app.push_widget(BigDialog("unable to save", "Experimental Mode could not be saved. Please try again."))
 
   def set_callbacks(self, on_settings: Callable | None = None, on_alerts: Callable | None = None,
                     alert_count_callback: Callable[[], int] | None = None,
@@ -218,6 +230,8 @@ class MiciHomeLayout(Widget):
         self._version_commit_label.set_text(self._version_text[2])
         self._version_commit_label.set_position(version_pos.x, version_pos.y + self._date_label.font_size + 7)
         self._version_commit_label.render()
+
+    self._experimental_icon.set_visible(get_longitudinal_e2e_enabled() and ui_state.has_longitudinal_control)
 
     # ***** Center-aligned bottom section icons *****
     usb_connected = ui_state.usb_connected

@@ -1,6 +1,8 @@
 import time
 import pyray as rl
 from enum import IntEnum
+from collections.abc import Callable
+from openpilot.selfdrive.ui.widgets.exp_mode_button import ExperimentalModeButton
 from openpilot.common.params import Params
 from openpilot.selfdrive.ui.widgets.offroad_alerts import UpdateAlert, OffroadAlert
 from openpilot.selfdrive.ui.widgets.prime import PrimeWidget
@@ -55,6 +57,8 @@ class HomeLayout(Widget):
     self._prime_widget = PrimeWidget()
     self._setup_widget = SetupWidget()
 
+    self._exp_mode_button = self._child(ExperimentalModeButton())
+    self.settings_callback: Callable[[], None] | None = None
     self._setup_callbacks()
 
   def show_event(self):
@@ -62,9 +66,13 @@ class HomeLayout(Widget):
     self.last_refresh = time.monotonic()
     self._refresh()
 
+  def set_settings_callback(self, callback: Callable):
+    self.settings_callback = callback
+
   def _setup_callbacks(self):
     self.update_alert.set_dismiss_callback(lambda: self._set_state(HomeLayoutState.HOME))
     self.offroad_alert.set_dismiss_callback(lambda: self._set_state(HomeLayoutState.HOME))
+    self._exp_mode_button.set_click_callback(lambda: self.settings_callback() if self.settings_callback else None)
 
   def _set_state(self, state: HomeLayoutState):
     # propagate show/hide events
@@ -182,7 +190,10 @@ class HomeLayout(Widget):
     self._prime_widget.render(self.left_column_rect)
 
   def _render_right_column(self):
-    self._setup_widget.render(self.right_column_rect)
+    exp_height = self._exp_mode_button.button_height
+    self._exp_mode_button.render(rl.Rectangle(self.right_column_rect.x, self.right_column_rect.y, self.right_column_rect.width, exp_height))
+    self._setup_widget.render(rl.Rectangle(self.right_column_rect.x, self.right_column_rect.y + exp_height + SPACING,
+                                          self.right_column_rect.width, self.right_column_rect.height - exp_height - SPACING))
 
   def _refresh(self):
     self._version_text = self._get_version_text()
