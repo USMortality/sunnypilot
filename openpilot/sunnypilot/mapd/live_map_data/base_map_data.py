@@ -42,6 +42,9 @@ class BaseMapData(ABC):
   def get_current_road_name(self) -> str:
     pass
 
+  def _log_observation(self, message) -> None:
+    pass
+
   def publish(self) -> None:
     speed_limit = self.get_current_speed_limit()
     next_speed_limit, next_speed_limit_distance = self.get_next_speed_limit_and_distance()
@@ -58,6 +61,7 @@ class BaseMapData(ABC):
     live_map_data.roadName = self.get_current_road_name()
 
     self.pm.send('liveMapDataSP', mapd_sp_send)
+    self._log_observation(mapd_sp_send)
 
   def tick(self) -> None:
     self.sm.update(0)

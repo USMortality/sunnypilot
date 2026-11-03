@@ -14,6 +14,11 @@ from openpilot.common.constants import CV
 from openpilot.selfdrive.ui.onroad.hud_renderer import UI_CONFIG
 from openpilot.selfdrive.ui.ui_state import ui_state
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Mode as SpeedLimitMode
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Policy as SpeedLimitPolicy
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.slc_config import (
+  get_slc_lookahead_speed_factor_down,
+  get_slc_lookahead_speed_factor_up,
+)
 from openpilot.common.hardware import HARDWARE
 from openpilot.system.ui.lib.application import gui_app, FontWeight
 from openpilot.system.ui.lib.multilang import tr
@@ -29,6 +34,14 @@ KM_TO_MILE = 0.621371
 
 AssistState = custom.LongitudinalPlanSP.SpeedLimit.AssistState
 SpeedLimitSource = custom.LongitudinalPlanSP.SpeedLimit.Source
+
+
+def should_show_speed_limit_ahead(speed_limit_policy, displayed_speed_limit, speed_limit_ahead,
+                                  speed_limit_ahead_valid, speed_limit_ahead_dist, display_distance):
+  map_enabled = speed_limit_policy != SpeedLimitPolicy.car_state_only
+  ahead_matches_current = round(speed_limit_ahead) == round(displayed_speed_limit)
+  return map_enabled and speed_limit_ahead_valid and speed_limit_ahead > 0 and not ahead_matches_current and \
+    speed_limit_ahead_dist <= display_distance
 
 
 @dataclass(frozen=True)
@@ -102,7 +115,10 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
     self.speed_limit_last_valid = False
     self.speed_limit_final_last = 0.0
     self.speed_limit_source = SpeedLimitSource.none
+    self.speed_limit_policy = SpeedLimitPolicy.car_state_only
     self.speed_limit_assist_state = AssistState.disabled
+    self.lookahead_speed_factor_down = 0.0
+    self.lookahead_speed_factor_up = 0.0
 
     self.speed_limit_ahead = 0.0
     self.speed_limit_ahead_dist = 0.0
@@ -145,6 +161,9 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
       self.speed_limit_final_last = resolver.speedLimitFinalLast * self.speed_conv
       self.speed_limit_source = resolver.source
       self.speed_limit_assist_state = assist.state
+      self.speed_limit_policy = ui_state.params.get("SpeedLimitPolicy", return_default=True)
+      self.lookahead_speed_factor_down = get_slc_lookahead_speed_factor_down()
+      self.lookahead_speed_factor_up = get_slc_lookahead_speed_factor_up()
 
     if sm.updated["liveMapDataSP"]:
       lmd = sm["liveMapDataSP"]
@@ -196,6 +215,8 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
         self._draw_pre_active_arrow(sign_rect)
       else:
         self._draw_ahead_info(sign_rect)
+      # Draw TomTom/OSM source indicator
+      self._draw_source_indicator(sign_rect)
 
   def _draw_sign_main(self, rect, alpha=1.0):
     speed_limit_warning_enabled = ui_state.speed_limit_mode is not None and ui_state.speed_limit_mode >= SpeedLimitMode.warning
@@ -286,10 +307,12 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
       self._draw_text_centered(self.font_bold, sub, int(box_sz * f_scale), rl.Vector2(s_rect.x + box_sz / 2, s_rect.y + box_sz / 2), white)
 
   def _draw_ahead_info(self, sign_rect):
-    source_is_map = self.speed_limit_source == SpeedLimitSource.map
-    valid = self.speed_limit_ahead_valid and self.speed_limit_ahead > 0 and self.speed_limit_ahead != self.speed_limit
+    lookahead_speed_factor = self.lookahead_speed_factor_up if self.speed_limit_ahead > self.speed_limit else self.lookahead_speed_factor_down
+    display_distance = 2.0 * lookahead_speed_factor * self.speed_limit_ahead
+    valid = should_show_speed_limit_ahead(self.speed_limit_policy, self.speed_limit_last, self.speed_limit_ahead,
+                                          self.speed_limit_ahead_valid, self.speed_limit_ahead_dist, display_distance)
 
-    if not (valid and source_is_map):
+    if not valid:
       return
 
     rect = rl.Rectangle(sign_rect.x + (sign_rect.width - 170) / 2, sign_rect.y + sign_rect.height + 10, 170, 160)
@@ -300,6 +323,40 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
     self._draw_text_centered(self.font_demi, "AHEAD", 40, rl.Vector2(mid_x, rect.y + 28), Colors.GREY)
     self._draw_text_centered(self.font_bold, str(round(self.speed_limit_ahead)), 70, rl.Vector2(mid_x, rect.y + 82), Colors.WHITE)
     self._draw_text_centered(self.font_norm, self._format_dist(self.speed_limit_ahead_dist), 36, rl.Vector2(mid_x, rect.y + 134), Colors.GREY)
+
+  def _draw_source_indicator(self, sign_rect):
+    """Draw TT or OSM indicator to the right of speed limit sign."""
+    # Only show if we have a valid speed limit
+    if not (self.speed_limit_valid or self.speed_limit_last_valid):
+      return
+
+    # Read runtime source status (written even when diagnostic logging is disabled).
+    source = None
+    color = rl.Color(150, 150, 150, 180)
+    try:
+      with open("/tmp/tomtom_active") as f:
+        content = f.read().strip()
+        if content.startswith("TomTom:"):
+          source = "TT"
+          color = rl.Color(100, 200, 100, 200)
+        elif content.startswith("TomTom retained"):
+          source = "TT"
+          color = rl.Color(230, 180, 80, 200)
+        elif content.startswith("TomTom unavailable"):
+          source = "TT"
+        elif content.startswith("OSM"):
+          source = "OSM"
+    except OSError:
+      pass
+    if source is None:
+      return
+
+    # Position to the right of sign
+    indicator_x = sign_rect.x + sign_rect.width + 8
+    indicator_y = sign_rect.y + sign_rect.height - 30
+
+    # Draw small text indicator
+    rl.draw_text_ex(self.font_demi, source, rl.Vector2(indicator_x, indicator_y), 28, 0, color)
 
   @staticmethod
   def _format_dist(d):
