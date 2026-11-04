@@ -179,7 +179,7 @@ def wait_for_modem():
     time.sleep(0.5)
 
 
-def main() -> NoReturn:
+def run_messages(diag, pm) -> NoReturn:
   unpack_gps_meas, size_gps_meas = dict_unpacker(gps_measurement_report, True)
   unpack_gps_meas_sv, size_gps_meas_sv = dict_unpacker(gps_measurement_report_sv, True)
 
@@ -193,31 +193,6 @@ def main() -> NoReturn:
   unpack_position, _ = dict_unpacker(position_report)
 
   unpack_position, _ = dict_unpacker(position_report)
-
-  wait_for_modem()
-
-  def cleanup(sig, frame):
-    cloudlog.warning("caught sig disabling quectel gps")
-
-    gpio_set(GPIO.GNSS_PWR_EN, False)
-    try:
-      teardown_quectel(diag)
-      cloudlog.warning("quectel cleanup done")
-    except NameError:
-      cloudlog.warning('quectel not yet setup')
-
-    sys.exit(0)
-  signal.signal(signal.SIGINT, cleanup)
-  signal.signal(signal.SIGTERM, cleanup)
-
-  # connect to modem
-  diag = ModemDiag()
-  setup_quectel(diag)
-  cloudlog.warning("quectel setup done")
-  gpio_init(GPIO.GNSS_PWR_EN, True)
-  gpio_set(GPIO.GNSS_PWR_EN, True)
-
-  pm = messaging.PubMaster(['qcomGnss', 'gpsLocation'])
 
   while 1:
     opcode, payload = diag.recv()
@@ -409,6 +384,45 @@ def main() -> NoReturn:
               setattr(sv, k, v)
 
       pm.send('qcomGnss', msg)
+
+
+def main() -> NoReturn:
+  pm = messaging.PubMaster(['qcomGnss', 'gpsLocation'])
+  diag = None
+
+  def cleanup(sig, frame):
+    cloudlog.warning("caught sig disabling quectel gps")
+    gpio_set(GPIO.GNSS_PWR_EN, False)
+    if diag is not None:
+      try:
+        teardown_quectel(diag)
+      except Exception:
+        cloudlog.exception("quectel cleanup failed")
+    sys.exit(0)
+
+  signal.signal(signal.SIGINT, cleanup)
+  signal.signal(signal.SIGTERM, cleanup)
+
+  # The manager does not automatically restart a failed PythonProcess. Recover
+  # modem I/O here so PPP/eSIM resets cannot leave a live GPS process without
+  # fixes, or a dead process waiting for the next ignition cycle.
+  while True:
+    try:
+      wait_for_modem()
+      diag = ModemDiag()
+      setup_quectel(diag)
+      gpio_init(GPIO.GNSS_PWR_EN, True)
+      gpio_set(GPIO.GNSS_PWR_EN, True)
+      cloudlog.warning("quectel setup done")
+      run_messages(diag, pm)
+    except Exception:
+      cloudlog.exception("GNSS modem I/O failed; reinitializing")
+    finally:
+      if diag is not None:
+        diag.serial.close()
+        diag = None
+    time.sleep(1.0)
+
 
 if __name__ == "__main__":
   main()

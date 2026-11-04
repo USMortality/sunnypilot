@@ -1,4 +1,7 @@
+import errno
 import select
+import time
+from pathlib import Path
 from struct import pack, unpack_from, calcsize
 
 from openpilot.common.serial import Serial
@@ -26,17 +29,40 @@ def crc16_x25(data: bytes) -> int:
     crc = _CRC16_X25_TABLE[(crc ^ b) & 0xFF] ^ (crc >> 8)
   return crc ^ 0xFFFF
 
+def find_diag_port(sysfs_root=Path("/sys/class/tty"), dev_root=Path("/dev")) -> str:
+  """Locate the Quectel diagnostic interface after USB port renumbering."""
+  candidates = []
+  for tty in Path(sysfs_root).glob("ttyUSB*"):
+    try:
+      device = (tty / "device").resolve()
+      interface = next(parent for parent in (device, *device.parents) if (parent / "bInterfaceNumber").is_file())
+      if ((interface / "bInterfaceNumber").read_text().strip() == "00" and
+          (interface.parent / "idVendor").read_text().strip().lower() == "2c7c"):
+        candidates.append(str(Path(dev_root) / tty.name))
+    except (OSError, StopIteration):
+      # A modem can disappear while sysfs is being enumerated.
+      continue
+  if len(candidates) != 1:
+    # Opening another numbered port could select NMEA or the PPP data channel.
+    raise OSError(errno.ENODEV, "no unique Quectel diagnostic interface available")
+  return candidates[0]
+
+
 class ModemDiag:
   def __init__(self):
     self.serial = self.open_serial()
     self.pend = b''
 
   def open_serial(self):
-    serial = Serial("/dev/ttyUSB0", baudrate=115200, rtscts=True, dsrdtr=True, timeout=0, exclusive=True)
-    serial.flush()
-    serial.reset_input_buffer()
-    serial.reset_output_buffer()
-    return serial
+    serial = Serial(find_diag_port(), baudrate=115200, rtscts=True, dsrdtr=True, timeout=0, exclusive=True)
+    try:
+      serial.flush()
+      serial.reset_input_buffer()
+      serial.reset_output_buffer()
+      return serial
+    except BaseException:
+      serial.close()
+      raise
 
   ESCAPE_CHAR = b'\x7d'
   TRAILER_CHAR = b'\x7e'
@@ -57,12 +83,19 @@ class ModemDiag:
     assert payload[-2:] == pack('<H', crc16_x25(payload[:-2]))
     return payload[:-2]
 
-  def recv(self):
-    # self.serial.read_until makes tons of syscalls!
+  def recv(self, timeout=10.0):
+    # A reset can leave an old USB fd readable at EOF indefinitely. Exit on
+    # disconnect or silence so qcomgpsd reinitializes GNSS against the newly
+    # enumerated modem, rather than spinning while publishing no fixes.
+    deadline = time.monotonic() + timeout
     raw_payload = [self.pend]
     while self.TRAILER_CHAR not in raw_payload[-1]:
-      select.select([self.serial.fd], [], [])
+      ready, _, _ = select.select([self.serial.fd], [], [], max(0., deadline - time.monotonic()))
+      if not ready:
+        raise TimeoutError("modem diagnostic response timed out")
       raw = self.serial.read(0x10000)
+      if not raw:
+        raise ConnectionError("modem diagnostic port disconnected")
       raw_payload.append(raw)
     raw_payload = b''.join(raw_payload)
     raw_payload, self.pend = raw_payload.split(self.TRAILER_CHAR, 1)
