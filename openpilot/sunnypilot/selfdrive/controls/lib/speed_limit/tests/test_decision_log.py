@@ -3,6 +3,7 @@ from types import SimpleNamespace as NS
 from unittest.mock import Mock, mock_open
 
 import pytest
+import numpy as np
 
 from openpilot.common.constants import CV
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.decision_log import SpeedLimitDecisionLogger
@@ -72,6 +73,13 @@ def test_audit_handles_non_finite_values_and_backend_failures(audit):
   logger.log("slc_decision", "failure", {})
   assert logger.emit.call_count == 1
   logger.log("slc_application", "bad_context", lambda: 1 / 0)
+
+
+@pytest.mark.parametrize('value', [True, False])
+def test_numpy_boolean_is_logged_as_json_boolean(audit, value):
+  logger, events, _ = audit
+  logger.log('slc_decision', 'numpy_boolean', {'lower_lookahead_active': np.bool_(value)})
+  assert json.loads(json.dumps(events[-1]))['lower_lookahead_active'] is value
 
 
 @pytest.fixture

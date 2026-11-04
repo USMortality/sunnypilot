@@ -3,6 +3,8 @@ import math
 import time
 from numbers import Integral, Real
 
+import numpy as np
+
 from openpilot.common.constants import CV
 from openpilot.common.swaglog import cloudlog
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.slc_config import get_slc_decision_logging
@@ -27,6 +29,8 @@ def message_info(sm, service):
 
 
 def _json_value(value):
+  if isinstance(value, np.bool_):
+    return bool(value)
   if value is None or isinstance(value, (str, bool)):
     return value[:256] if isinstance(value, str) else value
   if isinstance(value, Integral):

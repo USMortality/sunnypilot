@@ -25,7 +25,10 @@ def clean(value):
   if isinstance(value, float) and not math.isfinite(value):
     return None
   if isinstance(value, dict):
-    return {key: clean(item) for key, item in value.items()}
+    # Older decision loggers stringify numpy booleans. Keep their queued
+    # decisions compatible with the server's strict boolean schema.
+    return {key: (item == 'True' if key == 'lower_lookahead_active' and isinstance(item, str) and item in ('True', 'False') else clean(item))
+            for key, item in value.items()}
   if isinstance(value, list):
     return [clean(item) for item in value]
   return value

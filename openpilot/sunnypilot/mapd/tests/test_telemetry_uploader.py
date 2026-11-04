@@ -15,6 +15,13 @@ def test_nonfinite_gps_values_are_strict_json():
   assert clean({'position': [float('nan'), 8.], 'speed': float('inf')}) == {'position': [None, 8.], 'speed': None}
 
 
+@pytest.mark.parametrize('value,expected', [('True', True), ('False', False), (True, True), (False, False)])
+def test_legacy_lookahead_boolean_does_not_block_uploads(value, expected):
+  event = clean({'lower_lookahead_active': value, 'reason': 'True'})
+  assert event['lower_lookahead_active'] is expected
+  assert event['reason'] == 'True'
+
+
 class LocationMessages(dict):
   def __init__(self):
     super().__init__(liveLocationKalman=NS(positionGeodetic=NS(valid=True, value=[49.071, 8.475]), gpsOK=True, status='valid'),
