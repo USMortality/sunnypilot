@@ -13,7 +13,7 @@ from openpilot.cereal import log
 from openpilot.common.params import Params
 from openpilot.sunnypilot.mapd.live_map_data.base_map_data import BaseMapData
 from openpilot.sunnypilot.mapd.live_map_data.corridor import (
-  MAX_POSITION_DISTANCE_M, closest_progress, extend_geometry_to_position, first_reversal_progress, geometry_between, point_at_progress, polyline_length,
+  MAX_POSITION_DISTANCE_M, closest_progress, first_reversal_progress, geometry_between, point_at_progress, polyline_length, road_geometry_window,
 )
 from openpilot.sunnypilot.navd.helpers import Coordinate
 from openpilot.sunnypilot.mapd.live_map_data.tomtom_map_data import TARGET_AHEAD_DISTANCE_M, REFRESH_REMAINING_DISTANCE_M
@@ -132,11 +132,20 @@ class OsmMapData(BaseMapData):
     self.native_geometry = []
     corridor = ""
     try:
-      with open("/dev/shm/params/d/MapCurvatures") as f:
-        curvatures = json.load(f)
-      if curvatures:
-        geometry = [[pt["latitude"], pt["longitude"]] for pt in curvatures]
-        geometry = extend_geometry_to_position(geometry, [self.last_position.latitude, self.last_position.longitude])
+      # Curvature smoothing drops two nodes at each end. Use the complete
+      # topology so sparse roads still cover the vehicle and the road ahead.
+      # Keep compatibility with an unpatched native mapd.
+      try:
+        with open("/dev/shm/params/d/MapRoadGeometry") as f:
+          road_points = json.load(f)
+      except FileNotFoundError:
+        with open("/dev/shm/params/d/MapCurvatures") as f:
+          road_points = json.load(f)
+      if road_points:
+        geometry = [[pt["latitude"], pt["longitude"]] for pt in road_points]
+        # Bound the message around the vehicle, rather than dropping the end
+        # of a long way before locating the vehicle on it.
+        geometry = road_geometry_window(geometry, [self.last_position.latitude, self.last_position.longitude], self.last_bearing)
         self.native_geometry = geometry
         progress, _ = closest_progress(geometry, [self.last_position.latitude, self.last_position.longitude], heading=self.last_bearing)
         corridor = json.dumps({"geometry": geometry, "progressM": progress, "confidence": 1.0})

@@ -1,0 +1,165 @@
+diff --git a/mapd.go b/mapd.go
+index ae9f4b5..94541d3 100644
+--- a/mapd.go
++++ b/mapd.go
+@@ -300,6 +300,17 @@ func loop(state *State) {
+ 	state.NextWays, err = NextWays(pos, state.CurrentWay, offline, state.CurrentWay.OnWay.IsForward)
+ 	logde(errors.Wrap(err, "could not get next way"))
+ 
++	// Publish topology before curvature smoothing removes the endpoint nodes.
++	geometry, geometryErr := GetStateRoadGeometry(state)
++	if geometryErr != nil {
++		logde(geometryErr)
++		geometry = []RoadPoint{}
++	}
++	geometryData, geometryErr := json.Marshal(geometry)
++	if geometryErr == nil {
++		logwe(PutParam(MAP_ROAD_GEOMETRY, geometryData))
++	}
++
+ 	curvatures, err := GetStateCurvatures(state)
+ 	logde(errors.Wrap(err, "could not get curvatures from current state"))
+ 	target_velocities := GetTargetVelocities(curvatures)
+diff --git a/params.go b/params.go
+index dc63791..1ecf1e1 100644
+--- a/params.go
++++ b/params.go
+@@ -31,6 +31,7 @@ var (
+ 	DOWNLOAD_BOUNDS           = ParamPath("OSMDownloadBounds", true)
+ 	DOWNLOAD_LOCATIONS        = ParamPath("OSMDownloadLocations", true)
+ 	DOWNLOAD_PROGRESS         = ParamPath("OSMDownloadProgress", false)
++	MAP_ROAD_GEOMETRY         = ParamPath("MapRoadGeometry", true)
+ 	MAP_CURVATURES            = ParamPath("MapCurvatures", true)
+ 	MAP_TARGET_VELOCITIES     = ParamPath("MapTargetVelocities", true)
+ 	MAP_TARGET_LAT_A          = ParamPath("MapTargetLatA", true)
+@@ -86,6 +87,7 @@ func ResetParams() {
+ 	_ = PutParam(DOWNLOAD_BOUNDS, empty_data)
+ 	_ = PutParam(DOWNLOAD_LOCATIONS, empty_data)
+ 	_ = PutParam(DOWNLOAD_PROGRESS, empty_data)
++	_ = PutParam(MAP_ROAD_GEOMETRY, empty_array)
+ 	_ = PutParam(MAP_CURVATURES, empty_array)
+ 	_ = PutParam(MAP_TARGET_VELOCITIES, empty_array)
+ }
+diff --git a/road_geometry.go b/road_geometry.go
+new file mode 100644
+index 0000000..da81f4f
+--- /dev/null
++++ b/road_geometry.go
+@@ -0,0 +1,48 @@
++package main
++
++import "fmt"
++
++type RoadPoint struct {
++	Latitude  float64 `json:"latitude"`
++	Longitude float64 `json:"longitude"`
++}
++
++// GetStateRoadGeometry preserves endpoints lost by the curvature stencil.
++// Follow only mapd's selected directed ways, never extrapolate a road.
++func GetStateRoadGeometry(state *State) ([]RoadPoint, error) {
++	points := []RoadPoint{}
++	appendWay := func(way Way, forward bool) error {
++		nodes, err := way.Nodes()
++		if err != nil {
++			return err
++		}
++		if nodes.Len() < 2 {
++			return fmt.Errorf("road geometry has fewer than two nodes")
++		}
++		for i := 0; i < nodes.Len(); i++ {
++			index := i
++			if !forward {
++				index = nodes.Len() - 1 - i
++			}
++			node := nodes.At(index)
++			point := RoadPoint{node.Latitude(), node.Longitude()}
++			if i == 0 && len(points) > 0 {
++				if points[len(points)-1] != point {
++					return fmt.Errorf("disconnected road geometry")
++				}
++				continue
++			}
++			points = append(points, point)
++		}
++		return nil
++	}
++	if err := appendWay(state.CurrentWay.Way, state.CurrentWay.OnWay.IsForward); err != nil {
++		return nil, err
++	}
++	for _, next := range state.NextWays {
++		if err := appendWay(next.Way, next.IsForward); err != nil {
++			return nil, err
++		}
++	}
++	return points, nil
++}
+diff --git a/road_geometry_test.go b/road_geometry_test.go
+new file mode 100644
+index 0000000..4218d68
+--- /dev/null
++++ b/road_geometry_test.go
+@@ -0,0 +1,63 @@
++package main
++
++import (
++	"capnproto.org/go/capnp/v3"
++	"testing"
++)
++
++func geometryWay(t *testing.T, points []RoadPoint) Way {
++	t.Helper()
++	_, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
++	if err != nil {
++		t.Fatal(err)
++	}
++	way, err := NewWay(seg)
++	if err != nil {
++		t.Fatal(err)
++	}
++	nodes, err := way.NewNodes(int32(len(points)))
++	if err != nil {
++		t.Fatal(err)
++	}
++	for i, p := range points {
++		nodes.At(i).SetLatitude(p.Latitude)
++		nodes.At(i).SetLongitude(p.Longitude)
++	}
++	return way
++}
++
++func TestRoadGeometryPreservesSparseEndpoints(t *testing.T) {
++	points := []RoadPoint{{49.103, 8.47}, {49.104, 8.47}, {49.1044761, 8.4705139}, {49.1048576, 8.4707902}, {49.1051843, 8.4708363}, {49.1058722, 8.4709448}, {49.107, 8.4711}, {49.11, 8.4714}}
++	state := &State{CurrentWay: CurrentWay{Way: geometryWay(t, points), OnWay: OnWayResult{IsForward: true}}}
++	geometry, err := GetStateRoadGeometry(state)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(geometry) != len(points) || geometry[len(geometry)-1] != points[len(points)-1] {
++		t.Fatal(geometry)
++	}
++	curvatures, err := GetStateCurvatures(state)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(curvatures) != 4 || curvatures[3].Latitude != points[5].Latitude {
++		t.Fatal(curvatures)
++	}
++}
++
++func TestRoadGeometryDirectionAndConnections(t *testing.T) {
++	a, b, c := RoadPoint{49, 8}, RoadPoint{49.001, 8}, RoadPoint{49.002, 8}
++	state := &State{CurrentWay: CurrentWay{Way: geometryWay(t, []RoadPoint{b, a}), OnWay: OnWayResult{IsForward: false}},
++		NextWays: []NextWayResult{{Way: geometryWay(t, []RoadPoint{c, b}), IsForward: false}}}
++	geometry, err := GetStateRoadGeometry(state)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(geometry) != 3 || geometry[0] != a || geometry[1] != b || geometry[2] != c {
++		t.Fatal(geometry)
++	}
++	state.NextWays[0].IsForward = true
++	if _, err := GetStateRoadGeometry(state); err == nil {
++		t.Fatal("accepted disconnected roads")
++	}
++}

@@ -388,7 +388,7 @@ def test_initial_osm_update_requests_corridor_at_current_position(monkeypatch):
   assert position == [.015, 0]
   assert heading == 0
   current = Corridor.parse(raw)
-  assert current.progress_m > 1600
+  assert current.progress_m == pytest.approx(50, abs=1)
   requested = current.request_paths()[0]
   assert requested[0][0] >= .014
   assert closest_progress(requested, position)[1] == pytest.approx(0)

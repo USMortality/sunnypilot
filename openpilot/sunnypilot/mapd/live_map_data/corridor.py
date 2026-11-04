@@ -68,6 +68,13 @@ def normalized_geometry(points):
   return [[round(float(p[0]), 6), round(float(p[1]), 6)] for p in points]
 
 
+def road_geometry_window(points, position, heading):
+  """Keep full topology endpoints and bound a corridor around the vehicle."""
+  points = extend_geometry_to_position(points, position)
+  progress, _ = closest_progress(points, position, heading=heading)
+  return geometry_between(points, max(0., progress - 50.), progress + 1000.)[:256]
+
+
 def fingerprint(points, forward=True):
   directed = normalized_geometry(points if forward else list(reversed(points)))
   canonical = ";".join(f"{lat:.6f},{lon:.6f}" for lat, lon in directed)

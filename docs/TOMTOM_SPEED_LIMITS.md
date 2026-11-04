@@ -24,13 +24,17 @@ the repository or copy it to a device as part of development/testing.
 
 ## Behavior and limitations
 
-The existing native mapd publishes its selected road geometry through
-`MapCurvatures`. Python reads that geometry, computes vehicle progress and a
+The bundled native mapd publishes its full selected directed road geometry through
+`MapRoadGeometry`. This preserves the endpoint nodes removed by curvature
+smoothing in `MapCurvatures`, which could otherwise leave the corridor ending
+behind the vehicle on sparse roads. Python reads that geometry, computes vehicle progress and a
 directed fingerprint, and submits a roughly 200–1,000 m corridor to synchronous
 Snap to Roads. It includes headings when available and requests projected-point
 status plus route geometry, IDs, confidence, traveled distance, form-of-way, and
-maximum speed limits. No new native mapd publisher or `MapRoadCorridor` parameter
-is required. The parser also accepts a richer corridor format, but native mapd
+maximum speed limits. The native patch and reproducible build script are in
+`openpilot/third_party/mapd_pfeiferj`. Python supports older native binaries by
+reading `MapCurvatures` only when `MapRoadGeometry` is absent. An explicitly empty
+or invalid full geometry is not replaced with curvature points. The parser also accepts a richer corridor format, but native mapd
 does not currently provide its confidence or continuation metadata through this
 integration; route choice still relies on native mapd's selected geometry.
 
