@@ -24,6 +24,14 @@ the repository or copy it to a device as part of development/testing.
 
 ## Behavior and limitations
 
+Unrestricted motorway responses containing only TomTom's 130 km/h recommendation
+use 130 km/h as the SLC target, without a speed-limit offset. The display shows a
+gray unrestricted sign rather than a numeric maximum. An explicit maximum always
+wins over the recommendation. The car's 253 km/h unrestricted sentinel uses the
+same sign and target when vehicle fallback is selected. Missing limits and other
+advisory speeds are not treated as unrestricted. The `snap-v2` cache keys avoid
+reusing older responses that discarded this distinction.
+
 The bundled native mapd publishes its full selected directed road geometry through
 `MapRoadGeometry`. This preserves the endpoint nodes removed by curvature
 smoothing in `MapCurvatures`, which could otherwise leave the corridor ending

@@ -7,6 +7,7 @@ See the LICENSE.md file in the root directory for more details.
 
 from dataclasses import dataclass
 from enum import StrEnum
+import math
 import pyray as rl
 
 from openpilot.cereal import custom
@@ -113,6 +114,8 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
     self.speed_limit_offset = 0.0
     self.speed_limit_valid = False
     self.speed_limit_last_valid = False
+    self.speed_limit_unlimited = False
+    self.speed_limit_last_unlimited = False
     self.speed_limit_final_last = 0.0
     self.speed_limit_source = SpeedLimitSource.none
     self.speed_limit_policy = SpeedLimitPolicy.car_state_only
@@ -158,6 +161,8 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
       self.speed_limit_offset = resolver.speedLimitOffset * self.speed_conv
       self.speed_limit_valid = resolver.speedLimitValid
       self.speed_limit_last_valid = resolver.speedLimitLastValid
+      self.speed_limit_unlimited = resolver.speedLimitUnlimited
+      self.speed_limit_last_unlimited = resolver.speedLimitLastUnlimited
       self.speed_limit_final_last = resolver.speedLimitFinalLast * self.speed_conv
       self.speed_limit_source = resolver.source
       self.speed_limit_assist_state = assist.state
@@ -219,6 +224,9 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
       self._draw_source_indicator(sign_rect)
 
   def _draw_sign_main(self, rect, alpha=1.0):
+    if self.speed_limit_last_unlimited and (self.speed_limit_valid or self.speed_limit_last_valid):
+      self._render_unlimited(rect, alpha)
+      return
     speed_limit_warning_enabled = ui_state.speed_limit_mode is not None and ui_state.speed_limit_mode >= SpeedLimitMode.warning
     has_limit = self.speed_limit_valid or self.speed_limit_last_valid
     is_overspeed = has_limit and round(self.speed_limit_final_last) < round(self.speed)
@@ -249,6 +257,21 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
       arrow_y = sign_rect.y + (sign_rect.height - txt_icon.height) / 2
       color = rl.Color(255, 255, 255, int(icon_alpha))
       rl.draw_texture_ex(txt_icon, rl.Vector2(arrow_x, arrow_y), 0.0, 1.0, color)
+
+  @staticmethod
+  def _render_unlimited(rect, alpha=1.0):
+    center = rl.Vector2(rect.x + rect.width / 2, rect.y + rect.height / 2)
+    radius = (rect.width + 18) / 2
+    grey = rl.color_alpha(Colors.GREY, alpha)
+    rl.draw_circle_v(center, radius, rl.color_alpha(Colors.WHITE, alpha))
+    rl.draw_ring(center, radius * .94, radius, 0, 360, 72, grey)
+    # Parallel diagonal stripes clipped inside the circular sign.
+    for offset in (-.36, -.18, 0., .18, .36):
+      normal = offset * radius
+      half_chord = math.sqrt((radius * .88) ** 2 - normal ** 2)
+      x, y = center.x + normal / math.sqrt(2), center.y + normal / math.sqrt(2)
+      delta = half_chord / math.sqrt(2)
+      rl.draw_line_ex(rl.Vector2(x - delta, y + delta), rl.Vector2(x + delta, y - delta), radius * .055, grey)
 
   def _render_vienna(self, rect, val, sub, color, has_limit, alpha=1.0):
     center = rl.Vector2(rect.x + rect.width / 2, rect.y + rect.height / 2)
@@ -307,6 +330,8 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
       self._draw_text_centered(self.font_bold, sub, int(box_sz * f_scale), rl.Vector2(s_rect.x + box_sz / 2, s_rect.y + box_sz / 2), white)
 
   def _draw_ahead_info(self, sign_rect):
+    if ui_state.sm['liveMapDataSP'].speedLimitAheadUnlimited:
+      return
     lookahead_speed_factor = self.lookahead_speed_factor_up if self.speed_limit_ahead > self.speed_limit else self.lookahead_speed_factor_down
     display_distance = 2.0 * lookahead_speed_factor * self.speed_limit_ahead
     valid = should_show_speed_limit_ahead(self.speed_limit_policy, self.speed_limit_last, self.speed_limit_ahead,

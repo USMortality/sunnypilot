@@ -55,6 +55,7 @@ class OsmMapData(BaseMapData):
       return {
         "start_m": section["start"], "end_m": section["end"], "limit_kph": kph(section["speed"]) if section["speed"] is not None else None,
         "confidence": section["confidence"], "road_id": section.get("road_id"),
+        "unlimited": section.get("unlimited", False),
         "start_position": {"latitude": position[0], "longitude": position[1]},
         "geometry": geometry_between(result["geometry"], section["start"], section["end"]),
       }
@@ -73,8 +74,10 @@ class OsmMapData(BaseMapData):
       "road_name": data.roadName,
       "current_kph": kph(data.speedLimit),
       "current_valid": data.speedLimitValid,
+      "current_unlimited": bool(getattr(data, "speedLimitUnlimited", False)),
       "upcoming_kph": kph(data.speedLimitAhead),
       "upcoming_valid": data.speedLimitAheadValid,
+      "upcoming_unlimited": bool(getattr(data, "speedLimitAheadUnlimited", False)),
       "upcoming_distance_m": data.speedLimitAheadDistance,
       "tomtom_status": provider.status_reason if provider is not None else "not_configured",
       "tomtom_validation": provider.validation_reason if provider is not None else None,
@@ -168,6 +171,10 @@ class OsmMapData(BaseMapData):
 
   def _tomtom_only(self):
     return self.speed_limit_provider is not None and not getattr(self, "osm_fallback_enabled", True)
+
+  def get_speed_limit_unlimited(self, ahead: bool = False) -> bool:
+    return (self.provider_limits is not None and
+            getattr(self.speed_limit_provider, "ahead_unlimited" if ahead else "current_unlimited", False) is True)
 
   def get_current_speed_limit(self) -> float:
     if self.provider_limits is not None:

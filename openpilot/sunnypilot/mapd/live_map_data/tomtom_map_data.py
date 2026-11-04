@@ -94,6 +94,8 @@ class TomTomMapData:
     self.status_reason = "not_initialized"
     self.validation_reason = None
     self.last_failure_reason = None
+    self.current_unlimited = False
+    self.ahead_unlimited = False
 
   def update(self, raw_corridor, position, heading=None, now=None):
     self.heading = heading if heading is not None and math.isfinite(heading) else None
@@ -185,7 +187,8 @@ class TomTomMapData:
 
   @staticmethod
   def _cache_key(points):
-    return "snap-v1:" + fingerprint(points)
+    # v2 preserves advisory-only German motorway sections as unrestricted.
+    return "snap-v2:" + fingerprint(points)
 
   def _debug_write(self, path, message, mode="w"):
     if not self.debug_logging:
@@ -257,7 +260,7 @@ class TomTomMapData:
     parsed["reference"] = points
     # Speed limits rarely change - cache for 30 days
     parsed["expires"] = time.time() + CACHE_TTL_S  # noqa: TID251 — persisted expiry requires wall time.
-    self.cache.put(key, "snap-v1", parsed, "30d-cache", CACHE_TTL_S, persistent=True)
+    self.cache.put(key, "snap-v2", parsed, "30d-cache", CACHE_TTL_S, persistent=True)
     if self.debug_logging:
       summary = (f"geometry: {len(parsed.get('geometry', []))}\nsections: {len(parsed.get('sections', []))}\n" +
                  f"projectedValid: {parsed.get('projectedValid')}\n")
@@ -280,9 +283,15 @@ class TomTomMapData:
       if isinstance(limits, dict):
         limits = [limits]
       limit = next((speed for item in limits if (speed := speed_ms(item)) is not None), None)
+      # A 130 km/h advisory without a maximum is the unrestricted motorway
+      # case. Keep the sign separate from the requested advisory target.
+      unlimited = limit is None and any(item.get("type") == "Recommended" and
+                                       math.isclose(speed_ms({**item, "type": "Maximum"}) or 0., 130. / 3.6, abs_tol=.01) for item in limits)
+      if unlimited:
+        limit = 130. / 3.6
       length = polyline_length(points)
       sections.append({"start": offset, "end": offset + length, "speed": limit, "confidence": float(props.get("confidence", 0)),
-                       "road_id": props.get("id")})
+                       "road_id": props.get("id"), "unlimited": unlimited})
       geometry.extend(points if not geometry else points[1:])
       offset += length
     projected = payload.get("projectedPoints", [])
@@ -326,6 +335,7 @@ class TomTomMapData:
     return True
 
   def limits(self, position):
+    self.current_unlimited = self.ahead_unlimited = False
     if not self.result:
       return None
     progress, lateral = closest_progress(self.result["geometry"], position, heading=self.heading)
@@ -344,6 +354,7 @@ class TomTomMapData:
     for section in self.result["sections"]:
       if section["start"] <= progress <= section["end"]:
         current = section["speed"]
+        self.current_unlimited = section.get("unlimited", False)
       elif section["start"] > progress:
         if section["start"] >= horizon:
           break
@@ -353,5 +364,6 @@ class TomTomMapData:
           break
         if section["speed"] != current:
           upcoming = (section["speed"], section["start"] - progress)
+          self.ahead_unlimited = section.get("unlimited", False)
           break
     return (current, *upcoming) if current is not None else None

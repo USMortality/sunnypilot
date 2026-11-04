@@ -123,6 +123,39 @@ def test_logs_engagement_source_and_raw_candidates(resolver_context):
   assert not event["selected_invalid_map_message"]
 
 
+def test_unlimited_map_uses_advisory_without_offset_and_preserves_sign(resolver_context):
+  from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import OffsetType
+  resolver, sm, events, clock = resolver_context
+  resolver.frame = 1  # Keep explicit offset settings for this update.
+  resolver.offset_type, resolver.offset_value = OffsetType.fixed, 10
+  sm['liveMapDataSP'].speedLimit = 130 * CV.KPH_TO_MS
+  sm['liveMapDataSP'].speedLimitUnlimited = True
+  resolver.update(100 * CV.KPH_TO_MS, sm)
+  assert resolver.speed_limit_final * CV.MS_TO_KPH == pytest.approx(130)
+  assert resolver.speed_limit_unlimited and resolver.speed_limit_last_unlimited
+  assert events[-1]['selected_unlimited'] is True
+  # An outage retains the sign, and a subsequent posted limit replaces it.
+  sm['liveMapDataSP'].speedLimitValid = False
+  resolver.update(100 * CV.KPH_TO_MS, sm)
+  assert not resolver.speed_limit_unlimited and resolver.speed_limit_last_unlimited
+  sm['liveMapDataSP'].speedLimitValid = True
+  sm['liveMapDataSP'].speedLimitUnlimited = False
+  sm['liveMapDataSP'].speedLimit = 120 * CV.KPH_TO_MS
+  resolver.update(100 * CV.KPH_TO_MS, sm)
+  assert not resolver.speed_limit_last_unlimited
+  assert resolver.speed_limit_final * CV.MS_TO_KPH == pytest.approx(130)  # Ordinary +10 offset still applies.
+
+
+def test_car_unlimited_sentinel_is_not_a_253_kph_target(resolver_context):
+  from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Policy
+  resolver, sm, _, _ = resolver_context
+  resolver.frame, resolver.policy = 1, Policy.car_state_only
+  sm['carStateSP'].speedLimit = 253 * CV.KPH_TO_MS
+  resolver.update(100 * CV.KPH_TO_MS, sm)
+  assert resolver.speed_limit_final * CV.MS_TO_KPH == pytest.approx(130)
+  assert resolver.speed_limit_unlimited
+
+
 def test_logs_separate_approach_without_changing_enforced_limit(resolver_context):
   resolver, sm, events, clock = resolver_context
   sm['liveMapDataSP'].speedLimitAheadDistance = 240.

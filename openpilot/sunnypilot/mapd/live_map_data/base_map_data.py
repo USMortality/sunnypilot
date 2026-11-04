@@ -45,6 +45,9 @@ class BaseMapData(ABC):
   def _log_observation(self, message) -> None:
     pass
 
+  def get_speed_limit_unlimited(self, ahead: bool = False) -> bool:
+    return False
+
   def publish(self) -> None:
     speed_limit = self.get_current_speed_limit()
     next_speed_limit, next_speed_limit_distance = self.get_next_speed_limit_and_distance()
@@ -55,9 +58,11 @@ class BaseMapData(ABC):
 
     live_map_data.speedLimitValid = bool(MAX_SPEED_LIMIT > speed_limit > 0)
     live_map_data.speedLimit = speed_limit
+    live_map_data.speedLimitUnlimited = self.get_speed_limit_unlimited()
     live_map_data.speedLimitAheadValid = bool(MAX_SPEED_LIMIT > next_speed_limit > 0)
     live_map_data.speedLimitAhead = next_speed_limit
     live_map_data.speedLimitAheadDistance = next_speed_limit_distance
+    live_map_data.speedLimitAheadUnlimited = self.get_speed_limit_unlimited(ahead=True)
     live_map_data.roadName = self.get_current_road_name()
 
     self.pm.send('liveMapDataSP', mapd_sp_send)

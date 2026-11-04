@@ -35,6 +35,30 @@ def test_fingerprint_is_directed_and_stable():
   assert fingerprint(points) != fingerprint(list(reversed(points)))
 
 
+@pytest.mark.parametrize('maximum', [None, 120, 130])
+def test_motorway_advisory_preserves_unlimited_sign_and_posted_maximum(maximum):
+  limits = [{'value': 130, 'unit': 'kmph', 'type': 'Recommended'}]
+  if maximum is not None:
+    limits.append({'value': maximum, 'unit': 'kmph', 'type': 'Maximum'})
+  payload = {'route': [{'geometry': {'coordinates': [[0, 0], [0, .01]]},
+                        'properties': {'confidence': 1., 'speedLimits': limits}}]}
+  parsed = TomTomMapData._parse_response(payload)
+  assert parsed['sections'][0]['speed'] == pytest.approx((maximum or 130) / 3.6)
+  assert parsed['sections'][0]['unlimited'] is (maximum is None)
+  adapter = TomTomMapData.__new__(TomTomMapData)
+  adapter.result, adapter.heading = parsed, 0.
+  assert adapter.limits([.001, 0])[0] == pytest.approx((maximum or 130) / 3.6)
+  assert adapter.current_unlimited is (maximum is None)
+
+
+def test_missing_limit_or_other_advisory_is_not_assumed_unlimited():
+  for limits in ([], [{'value': 40, 'unit': 'kmph', 'type': 'Recommended'}]):
+    parsed = TomTomMapData._parse_response({'route': [{'geometry': {'coordinates': [[0, 0], [0, .01]]},
+                                                      'properties': {'confidence': 1., 'speedLimits': limits}}]})
+    assert parsed['sections'][0]['speed'] is None
+    assert not parsed['sections'][0]['unlimited']
+
+
 def test_corridor_rejects_tamper_and_bounds_forks():
   raw = corridor(continuations=[{"geometry": line(lon=i * .001)} for i in range(8)])
   assert len(Corridor.parse(raw).continuations) == 3

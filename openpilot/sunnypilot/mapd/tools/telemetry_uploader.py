@@ -110,6 +110,7 @@ def cached_corridors(position, now, path='/data/sunnypilot/tomtom-cache.sqlite')
         sections.append({'start_m': section['start'], 'end_m': section['end'],
                          'limit_kph': round(section['speed'] * 3.6, 1) if section['speed'] is not None else None,
                          'confidence': section['confidence'], 'road_id': section.get('road_id'),
+                         'unlimited': section.get('unlimited', False),
                          'start_position': {'latitude': start[0], 'longitude': start[1]},
                          'geometry': geometry_between(geometry, section['start'], section['end'])})
       events.append({'event': 'tomtom_cache', 'provider': 'tomtom', 'cache_key': key,

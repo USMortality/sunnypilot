@@ -14,6 +14,7 @@ from openpilot.common.realtime import DT_MDL
 from openpilot.sunnypilot import PARAMS_UPDATE_PERIOD, get_sanitize_int_param
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit import LIMIT_MAX_MAP_DATA_AGE
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import Policy, OffsetType
+from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.unlimited import is_unlimited_car_limit, UNLIMITED_TARGET_MS
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.decision_log import SpeedLimitDecisionLogger, kph, message_info
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.slc_config import (
   get_slc_lookahead_lower_limits,
@@ -86,6 +87,11 @@ class SpeedLimitResolver:
     self.speed_limit_final = 0.
     self.speed_limit_final_last = 0.
     self.speed_limit_offset = 0.
+    self.speed_limit_unlimited = False
+    self.speed_limit_last_unlimited = False
+    self.car_limit_unlimited = False
+    self.map_limit_unlimited = False
+    self.map_ahead_unlimited = False
     self.lower_lookahead_active = False
     self.approach_speed_limit = 0.
     self.approach_speed_limit_final = 0.
@@ -112,6 +118,7 @@ class SpeedLimitResolver:
     if self.speed_limit > 0.:
       self.speed_limit_last = self.speed_limit
       self.speed_limit_final_last = self.speed_limit_final
+      self.speed_limit_last_unlimited = self.speed_limit_unlimited
 
   @property
   def speed_limit_valid(self) -> bool:
@@ -131,7 +138,9 @@ class SpeedLimitResolver:
       self.lookahead_speed_factor_down = self._get_lookahead_speed_factor_down()
       self.lookahead_lower_limits = self._get_lookahead_lower_limits()
 
-  def _get_speed_limit_offset(self, speed_limit: float | None = None) -> float:
+  def _get_speed_limit_offset(self, speed_limit: float | None = None, unlimited: bool = False) -> float:
+    if unlimited:
+      return 0.
     if self.offset_type == OffsetType.off:
       return 0
     elif self.offset_type == OffsetType.fixed:
@@ -147,11 +156,14 @@ class SpeedLimitResolver:
 
   def _get_from_car_state(self, sm: messaging.SubMaster) -> None:
     self._reset_limit_sources(SpeedLimitSource.car)
-    self.limit_solutions[SpeedLimitSource.car] = sm['carStateSP'].speedLimit
+    car_limit = sm['carStateSP'].speedLimit
+    self.car_limit_unlimited = is_unlimited_car_limit(car_limit)
+    self.limit_solutions[SpeedLimitSource.car] = UNLIMITED_TARGET_MS if self.car_limit_unlimited else car_limit
     self.distance_solutions[SpeedLimitSource.car] = 0.
 
   def _get_from_map_data(self, sm: messaging.SubMaster) -> None:
     self._reset_limit_sources(SpeedLimitSource.map)
+    self.map_limit_unlimited = self.map_ahead_unlimited = False
     self.approach_speed_limit = 0.
     self.approach_speed_limit_final = 0.
     self.approach_distance = 0.
@@ -170,6 +182,8 @@ class SpeedLimitResolver:
 
     speed_limit = map_data.speedLimit if map_data.speedLimitValid else 0.
     next_speed_limit = map_data.speedLimitAhead if map_data.speedLimitAheadValid else 0.
+    self.map_limit_unlimited = speed_limit > 0. and getattr(map_data, 'speedLimitUnlimited', False) is True
+    self.map_ahead_unlimited = next_speed_limit > 0. and getattr(map_data, 'speedLimitAheadUnlimited', False) is True
 
     self._calculate_map_data_limits(sm, speed_limit, next_speed_limit)
 
@@ -261,6 +275,8 @@ class SpeedLimitResolver:
       self.approach_reason = "engagement_current_limit_only"
 
     source = self._get_source_solution_according_to_policy()
+    self.speed_limit_unlimited = (self.car_limit_unlimited if source == SpeedLimitSource.car else
+                                  self.map_limit_unlimited if source == SpeedLimitSource.map else False)
     speed_limit = self.limit_solutions[source] if source else 0.
     distance = self.distance_solutions[source] if source else 0.
 
@@ -271,10 +287,10 @@ class SpeedLimitResolver:
     self.update_params()
 
     self.speed_limit, self.distance, self.source = self._resolve_limit_sources(sm, current_only)
-    self.speed_limit_offset = self._get_speed_limit_offset()
+    self.speed_limit_offset = self._get_speed_limit_offset(unlimited=self.speed_limit_unlimited)
 
     self.update_speed_limit_states()
-    self.approach_speed_limit_final = (self.approach_speed_limit + self._get_speed_limit_offset(self.approach_speed_limit)
+    self.approach_speed_limit_final = (self.approach_speed_limit + self._get_speed_limit_offset(self.approach_speed_limit, self.map_ahead_unlimited)
                                        if self.approach_speed_limit > 0. else 0.)
     self.lower_lookahead_active = (self.policy != Policy.car_state_only and self.speed_limit_valid and
                                    0. < self.approach_speed_limit_final < self.speed_limit_final and self.approach_distance > 0.)
@@ -288,7 +304,7 @@ class SpeedLimitResolver:
       "map_message_mono_time_ns": message_info(sm, "liveMapDataSP")["mono_time_ns"],
     }
     def key():
-      return (self.policy, self.source, kph(self.speed_limit), kph(self.speed_limit_offset), current_only,
+      return (self.policy, self.source, kph(self.speed_limit), self.speed_limit_unlimited, kph(self.speed_limit_offset), current_only,
               self.map_decision_reason, self.lower_lookahead_active, kph(self.approach_speed_limit_final), self._ahead_confirmed,
               message_info(sm, "liveMapDataSP")["valid"],
               kph(sm['carStateSP'].speedLimit), kph(sm['liveMapDataSP'].speedLimit), kph(sm['liveMapDataSP'].speedLimitAhead))
@@ -326,6 +342,8 @@ class SpeedLimitResolver:
       "lookahead_factor_down": self.lookahead_speed_factor_down,
       "lookahead_factor_up": self.lookahead_speed_factor_up,
       "selected_kph": kph(self.speed_limit),
+      "selected_unlimited": self.speed_limit_unlimited,
+      "retained_unlimited": self.speed_limit_last_unlimited,
       "offset_kph": kph(self.speed_limit_offset),
       "target_kph": kph(self.speed_limit_final),
       "retained_target_kph": kph(self.speed_limit_final_last),
