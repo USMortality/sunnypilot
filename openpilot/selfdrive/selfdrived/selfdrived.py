@@ -54,6 +54,11 @@ MonitoringPolicy = log.DriverMonitoringState.MonitoringPolicy
 TurnDirection = custom.ModelDataV2SP.TurnDirection
 
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
+# Existing ben calibration, not newly validated safety bounds: exclude close
+# leads (10 m), near-zero opening speed (0.5 m/s), and ego braking (-1 m/s²).
+# The 0.5 m lateral gate identifies the target side during crossover. The 10 s
+# grace covers a perception handoff after the maneuver; it still requires an
+# opening gap, valid radar, sufficient distance, and no driver brake input.
 LANE_CHANGE_FCW_SUPPRESS_MIN_DREL = 10.0
 LANE_CHANGE_FCW_SUPPRESS_PULLING_AWAY_VREL = 0.5
 LANE_CHANGE_FCW_SUPPRESS_MIN_AEGO = -1.0
@@ -70,6 +75,8 @@ def should_suppress_lane_change_fcw(sm: messaging.SubMaster, CS: car.CarState, r
   lane_change_direction = sm['modelV2'].meta.laneChangeDirection
   lead = sm['radarState'].leadOne
   # yRel is left-positive; during the crossover, require the lead to be clearly on the target side.
+  # After completion direction may reset to none. The bounded grace intentionally
+  # does not use it; the distance, opening-speed and braking gates still apply.
   lead_on_target_side = ((lane_change_direction == LaneChangeDirection.left and lead.yRel > LANE_CHANGE_FCW_SUPPRESS_MIN_TARGET_YREL) or
                          (lane_change_direction == LaneChangeDirection.right and lead.yRel < -LANE_CHANGE_FCW_SUPPRESS_MIN_TARGET_YREL))
   return (lead.present and

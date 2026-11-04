@@ -496,6 +496,9 @@ class Modem:
         termios.tcflush(serial_fd, termios.TCIFLUSH)
         os.write(serial_fd, b"AT+CFUN=1,1\r")
         termios.tcdrain(serial_fd)
+      # Start a fresh PPP retry budget only after the reset command was sent.
+      # Keep _last_reset intact so recovery cannot bypass the reset cooldown.
+      self._ppp.reset_fail_counter()
     finally:
       fcntl.flock(fd, fcntl.LOCK_UN)
       os.close(fd)

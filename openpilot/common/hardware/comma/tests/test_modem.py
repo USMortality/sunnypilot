@@ -115,8 +115,27 @@ def test_reset_sends_command_and_records_cooldown(modem, tmp_path):
     serial.return_value.__enter__.return_value = 42
     assert modem._do_resetting() == State.DISCONNECTING
     write.assert_called_once_with(42, b'AT+CFUN=1,1\r')
-    # A failed connection after reset reinitializes without resetting the modem again.
+    assert modem._ppp.fails == 0
+    # A reset starts a fresh PPP retry budget while retaining the reset cooldown.
+    assert modem._handle_pppd_exit() == State.CONNECTED
+    assert modem._ppp.fails == 1
+    assert modem._handle_pppd_exit() == State.CONNECTED
     assert modem._handle_pppd_exit() == State.DISCONNECTING
   assert modem._last_reset == 1000
   modem._ppp.kill.assert_called_once()
   modem._ppp.cleanup_routes.assert_called_once()
+
+
+def test_failed_reset_write_preserves_failure_counter_and_cooldown(modem, tmp_path):
+  for _ in range(PPPSession.MAX_FAILS):
+    modem._ppp.record_fail()
+  with patch('openpilot.common.hardware.comma.modem.AT_LOCK', str(tmp_path / 'modem.lock')), \
+       patch('openpilot.common.hardware.comma.modem._serial_port') as serial, \
+       patch('openpilot.common.hardware.comma.modem.os.write', side_effect=OSError('USB disconnected')), \
+       patch('openpilot.common.hardware.comma.modem.termios.tcflush'), \
+       patch('openpilot.common.hardware.comma.modem.time.monotonic', return_value=1000):
+    serial.return_value.__enter__.return_value = 42
+    with pytest.raises(OSError, match='USB disconnected'):
+      modem._do_resetting()
+  assert modem._ppp.fails == PPPSession.MAX_FAILS
+  assert modem._last_reset == 1000
