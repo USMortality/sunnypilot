@@ -29,6 +29,23 @@ def point_at_progress(points, progress):
   return points[-1]
 
 
+def geometry_between(points, start, end):
+  """Clip a speed section to the road polyline, retaining intermediate bends."""
+  if len(points) < 2:
+    return []
+  start, end = max(0., start), min(polyline_length(points), end)
+  if end <= start:
+    return []
+  selected = [point_at_progress(points, start)]
+  walked = 0.
+  for a, b in zip(points, points[1:], strict=False):
+    walked += distance_m(a, b)
+    if start < walked < end:
+      selected.append(b)
+  selected.append(point_at_progress(points, end))
+  return selected
+
+
 def extend_geometry_to_position(points, position):
   """Include a vehicle just before the first road node, without bridging adjacent roads."""
   if len(points) < 2 or distance_m(position, points[0]) > MAX_POSITION_EXTENSION_M:

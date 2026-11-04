@@ -13,7 +13,7 @@ from openpilot.cereal import log
 from openpilot.common.params import Params
 from openpilot.sunnypilot.mapd.live_map_data.base_map_data import BaseMapData
 from openpilot.sunnypilot.mapd.live_map_data.corridor import (
-  MAX_POSITION_DISTANCE_M, closest_progress, extend_geometry_to_position, first_reversal_progress, point_at_progress, polyline_length,
+  MAX_POSITION_DISTANCE_M, closest_progress, extend_geometry_to_position, first_reversal_progress, geometry_between, point_at_progress, polyline_length,
 )
 from openpilot.sunnypilot.navd.helpers import Coordinate
 from openpilot.sunnypilot.mapd.live_map_data.tomtom_map_data import TARGET_AHEAD_DISTANCE_M, REFRESH_REMAINING_DISTANCE_M
@@ -56,6 +56,7 @@ class OsmMapData(BaseMapData):
         "start_m": section["start"], "end_m": section["end"], "limit_kph": kph(section["speed"]) if section["speed"] is not None else None,
         "confidence": section["confidence"], "road_id": section.get("road_id"),
         "start_position": {"latitude": position[0], "longitude": position[1]},
+        "geometry": geometry_between(result["geometry"], section["start"], section["end"]),
       }
     context = {
       "map_message_mono_time_ns": message.logMonoTime,

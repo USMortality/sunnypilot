@@ -54,7 +54,8 @@ def not_long_maneuver(started: bool, params: Params, CP: car.CarParams) -> bool:
   return started and not params.get_bool("LongitudinalManeuverMode")
 
 def qcomgps(started: bool, params: Params, CP: car.CarParams) -> bool:
-  return started and not ublox_available()
+  # Telemetry is explicitly opt-in; keep GNSS available while powered/parked.
+  return (started or os.path.isfile('/data/sunnypilot/slc-telemetry.json')) and not ublox_available()
 
 def always_run(started: bool, params: Params, CP: car.CarParams) -> bool:
   return True
@@ -183,6 +184,8 @@ procs += [
   # mapd
   NativeProcess("mapd", Paths.mapd_root(), ["bash", "-c", f"{MAPD_PATH} > /dev/null 2>&1"], mapd_ready),
   PythonProcess("mapd_manager", "openpilot.sunnypilot.mapd.mapd_manager", always_run),
+  PythonProcess("slc_telemetry", "openpilot.sunnypilot.mapd.tools.telemetry_uploader",
+                lambda started, params, CP: os.path.isfile('/data/sunnypilot/slc-telemetry.json')),
 
   # locationd
   NativeProcess("locationd_llk", "openpilot/sunnypilot/selfdrive/locationd", ["./locationd"], only_onroad),
