@@ -107,6 +107,7 @@ class State(Enum):
   CONNECTING = "CONNECTING"
   CONNECTED = "CONNECTED"
   DISCONNECTING = "DISCONNECTING"
+  RESETTING = "RESETTING"
 
 
 STATE_WAIT = 1.0  # seconds to wait after each state handler returns
@@ -115,14 +116,17 @@ STATE_WAIT = 1.0  # seconds to wait after each state handler returns
 class PPPSession:
   """Owns pppd lifecycle, fail tracking, and PPP routing."""
   MAX_FAILS = 3
+  CONNECT_TIMEOUT = 90
 
   def __init__(self):
     self._proc: subprocess.Popen | None = None
     self._fails = 0
     self._peer = ""
+    self.started_at = 0.0
 
   def start(self):
     self._proc = subprocess.Popen(PPPD_CMD, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    self.started_at = time.monotonic()
     self._peer = ""
     logging.info(f"PPP dialing CID {DIAL_CID}")
 
@@ -210,11 +214,16 @@ class PPPSession:
 
 
 class Modem:
+  RESET_COOLDOWN = 15 * 60
+  STABLE_CONNECTION_TIME = 60
+
   def __init__(self):
     self._ppp = PPPSession()
     self._sim_change = False
     self._apn = ""  # blank = network-provided via PCO
     self._roaming_allowed = True
+    self._last_reset: float | None = None
+    self._connected_since: float | None = None
     self.running = True
     self.S = INITIAL_STATE.copy()
 
@@ -401,16 +410,19 @@ class Modem:
 
   def _do_connecting(self):
     logging.info("starting pppd")
-    self._ppp.reset_fail_counter()
     self._sim_change = False
     self._ppp.start()
     return State.CONNECTED
 
   def _handle_pppd_exit(self):
+    self._connected_since = None
+    self._publish_state(connected=False, ip_address="")
     if self._sim_change or not os.path.exists(AT_PORT):
       return State.DISCONNECTING
     give_up = self._ppp.record_fail()
     if give_up:
+      if self._last_reset is None or time.monotonic() - self._last_reset >= self.RESET_COOLDOWN:
+        return State.RESETTING
       logging.warning(f"PPP fail {self._ppp.fails}/{self._ppp.MAX_FAILS}, reconnecting")
       return State.DISCONNECTING
     logging.warning(f"PPP fail {self._ppp.fails}/{self._ppp.MAX_FAILS}, retrying")
@@ -447,7 +459,47 @@ class Modem:
       return State.DISCONNECTING
 
     self._poll()
+    now = time.monotonic()
+    if self.S["connected"]:
+      if self._connected_since is None:
+        self._connected_since = now
+      if now - self._connected_since >= self.STABLE_CONNECTION_TIME:
+        self._ppp.reset_fail_counter()
+    else:
+      self._connected_since = None
+      if now - self._ppp.started_at >= self._ppp.CONNECT_TIMEOUT:
+        logging.warning("PPP timed out waiting for an IP address")
+        self._ppp.kill()
+        return self._handle_pppd_exit()
     return State.CONNECTED
+
+  def _do_resetting(self):
+    if self._sim_change or self._params_changed() or not os.path.exists(AT_PORT):
+      return State.DISCONNECTING
+    # LPA operations share the AT lock, so a reset cannot interrupt profile management.
+    # Do not count a busy channel as an attempted reset.
+    fd = os.open(AT_LOCK, os.O_CREAT | os.O_RDWR, 0o666)
+    try:
+      fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+      os.close(fd)
+      return State.RESETTING
+    try:
+      self._ppp.kill()
+      self._ppp.cleanup_routes()
+      self._publish_state(connected=False, ip_address="")
+      self._last_reset = time.monotonic()
+      logging.warning(f"resetting modem after {self._ppp.fails} PPP failures")
+      # Send through the already locked channel; _at() would acquire the lock again.
+      # CFUN=1,1 restores full functionality and restarts the modem.
+      with _serial_port(AT_PORT, 9600) as serial_fd:
+        termios.tcflush(serial_fd, termios.TCIFLUSH)
+        os.write(serial_fd, b"AT+CFUN=1,1\r")
+        termios.tcdrain(serial_fd)
+    finally:
+      fcntl.flock(fd, fcntl.LOCK_UN)
+      os.close(fd)
+    return State.DISCONNECTING
 
   def _do_disconnecting(self):
     logging.warning("reconnecting")
@@ -456,6 +508,7 @@ class Modem:
     self._ppp.cleanup_routes()
     self._ppp.reset_data_port()
     self._sim_change = False
+    self._connected_since = None
     return State.INITIALIZING
 
   def _poll_signal(self) -> dict:
@@ -588,6 +641,7 @@ class Modem:
       State.CONNECTING: self._do_connecting,
       State.CONNECTED: self._do_connected,
       State.DISCONNECTING: self._do_disconnecting,
+      State.RESETTING: self._do_resetting,
     }
 
     while self.running:
