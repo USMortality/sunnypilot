@@ -5,16 +5,15 @@ This file is part of sunnypilot and is licensed under the MIT License.
 See the LICENSE.md file in the root directory for more details.
 """
 from openpilot.sunnypilot import get_file_hash
-from openpilot.sunnypilot.mapd import MAPD_PATH
-from openpilot.sunnypilot.mapd.update_version import MAPD_HASH_PATH
-from openpilot.common.test import OpenpilotTestCase
+from openpilot.sunnypilot.mapd import MAPD_PATH, MAPD_HASH_PATH
+from unittest import TestCase
 
 
-class TestMapdVersion(OpenpilotTestCase):
+class TestMapdVersion(TestCase):
   def test_compare_versions(self):
     mapd_hash = get_file_hash(MAPD_PATH)
 
     with open(MAPD_HASH_PATH) as f:
       current_hash = f.read().strip()
 
-    assert current_hash == mapd_hash, "Run sunnypilot/mapd/update_version.py to update the current mapd version and hash"
+    assert current_hash == mapd_hash, "Run bash openpilot/third_party/mapd_pfeiferj/build.sh to rebuild mapd and its checksum"

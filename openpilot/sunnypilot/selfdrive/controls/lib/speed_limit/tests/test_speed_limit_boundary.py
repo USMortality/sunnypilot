@@ -104,3 +104,34 @@ def test_disappearing_upcoming_limit_does_not_change_assist_target(boundary_plan
 def test_approach_cannot_override_other_controls(assist, source, cruise, current_decel):
   assert not planner_module.speed_limit_approach_allowed(assist, True, getattr(planner_module.LongitudinalPlanSource, source),
                                                         cruise, 20., current_decel)
+
+
+def test_higher_current_limit_updates_cruise_without_extra_confirmation(boundary_planner):
+  from openpilot.cereal import custom
+  from openpilot.common.constants import CV
+  from openpilot.sunnypilot.selfdrive.car.cruise_ext import VCruiseHelperSP
+  planner, observe = boundary_planner
+  helper = VCruiseHelperSP.__new__(VCruiseHelperSP)
+  helper.v_cruise_kph = helper.v_cruise_cluster_kph = 72.
+  helper.v_cruise_min = 0.
+  helper.prev_sla_state = assist_module.SpeedLimitAssistState.disabled
+  helper.prev_speed_limit_final_last_kph = 0.
+
+  def receive_plan():
+    message = custom.LongitudinalPlanSP.new_message()
+    message.speedLimit.resolver.speedLimitValid = planner.resolver.speed_limit_valid
+    message.speedLimit.resolver.speedLimitLastValid = planner.resolver.speed_limit_last_valid
+    message.speedLimit.resolver.speedLimitFinalLast = planner.resolver.speed_limit_final_last
+    message.speedLimit.assist.state = planner.sla.state
+    helper.update_speed_limit_assist(True, message)
+    helper.update_speed_limit_assist_v_cruise_non_pcm()
+
+  for second, distance in [(100., 90.), (101., 60.), (102., 30.), (103., 0.)]:
+    assert observe(second, distance, current=20., upcoming=30., cruise=20.) == 20.
+    receive_plan()
+    assert helper.v_cruise_kph == 72.
+  observe(104., 0., current=30., upcoming=0., cruise=20.)
+  assert planner.sla.is_active
+  receive_plan()
+  assert helper.v_cruise_kph == pytest.approx(108.)
+  assert observe(105., 0., current=30., upcoming=0., cruise=helper.v_cruise_kph * CV.KPH_TO_MS) == 30.

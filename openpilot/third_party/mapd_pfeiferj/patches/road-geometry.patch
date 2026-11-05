@@ -1,54 +1,41 @@
 diff --git a/mapd.go b/mapd.go
-index ae9f4b5..94541d3 100644
+index ae9f4b5..f711029 100644
 --- a/mapd.go
 +++ b/mapd.go
-@@ -300,6 +300,17 @@ func loop(state *State) {
- 	state.NextWays, err = NextWays(pos, state.CurrentWay, offline, state.CurrentWay.OnWay.IsForward)
- 	logde(errors.Wrap(err, "could not get next way"))
- 
+@@ -302,0 +303,13 @@ func loop(state *State) {
 +	// Publish topology before curvature smoothing removes the endpoint nodes.
 +	geometry, geometryErr := GetStateRoadGeometry(state)
 +	if geometryErr != nil {
 +		logde(geometryErr)
-+		geometry = []RoadPoint{}
++		if len(geometry) < 2 {
++			geometry = []RoadPoint{}
++		}
 +	}
 +	geometryData, geometryErr := json.Marshal(geometry)
 +	if geometryErr == nil {
 +		logwe(PutParam(MAP_ROAD_GEOMETRY, geometryData))
 +	}
 +
- 	curvatures, err := GetStateCurvatures(state)
- 	logde(errors.Wrap(err, "could not get curvatures from current state"))
- 	target_velocities := GetTargetVelocities(curvatures)
 diff --git a/params.go b/params.go
 index dc63791..1ecf1e1 100644
 --- a/params.go
 +++ b/params.go
-@@ -31,6 +31,7 @@ var (
- 	DOWNLOAD_BOUNDS           = ParamPath("OSMDownloadBounds", true)
- 	DOWNLOAD_LOCATIONS        = ParamPath("OSMDownloadLocations", true)
- 	DOWNLOAD_PROGRESS         = ParamPath("OSMDownloadProgress", false)
+@@ -33,0 +34 @@ var (
 +	MAP_ROAD_GEOMETRY         = ParamPath("MapRoadGeometry", true)
- 	MAP_CURVATURES            = ParamPath("MapCurvatures", true)
- 	MAP_TARGET_VELOCITIES     = ParamPath("MapTargetVelocities", true)
- 	MAP_TARGET_LAT_A          = ParamPath("MapTargetLatA", true)
-@@ -86,6 +87,7 @@ func ResetParams() {
- 	_ = PutParam(DOWNLOAD_BOUNDS, empty_data)
- 	_ = PutParam(DOWNLOAD_LOCATIONS, empty_data)
- 	_ = PutParam(DOWNLOAD_PROGRESS, empty_data)
+@@ -88,0 +90 @@ func ResetParams() {
 +	_ = PutParam(MAP_ROAD_GEOMETRY, empty_array)
- 	_ = PutParam(MAP_CURVATURES, empty_array)
- 	_ = PutParam(MAP_TARGET_VELOCITIES, empty_array)
- }
 diff --git a/road_geometry.go b/road_geometry.go
 new file mode 100644
-index 0000000..da81f4f
+index 0000000..5a6fc46
 --- /dev/null
 +++ b/road_geometry.go
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,57 @@
 +package main
 +
-+import "fmt"
++import (
++	"capnproto.org/go/capnp/v3"
++	"fmt"
++)
 +
 +type RoadPoint struct {
 +	Latitude  float64 `json:"latitude"`
@@ -60,6 +47,11 @@ index 0000000..da81f4f
 +func GetStateRoadGeometry(state *State) ([]RoadPoint, error) {
 +	points := []RoadPoint{}
 +	appendWay := func(way Way, forward bool) error {
++		// Matching repeatedly traverses the same offline message. Start a new,
++		// bounded read budget when copying geometry from the selected ways.
++		if message := capnp.Struct(way).Message(); message != nil {
++			message.ResetReadLimit(64 << 20)
++		}
 +		nodes, err := way.Nodes()
 +		if err != nil {
 +			return err
@@ -89,17 +81,18 @@ index 0000000..da81f4f
 +	}
 +	for _, next := range state.NextWays {
 +		if err := appendWay(next.Way, next.IsForward); err != nil {
-+			return nil, err
++			// An unavailable continuation does not invalidate the known road.
++			return points, err
 +		}
 +	}
 +	return points, nil
 +}
 diff --git a/road_geometry_test.go b/road_geometry_test.go
 new file mode 100644
-index 0000000..4218d68
+index 0000000..e32718a
 --- /dev/null
 +++ b/road_geometry_test.go
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,128 @@
 +package main
 +
 +import (
@@ -163,3 +156,119 @@ index 0000000..4218d68
 +		t.Fatal("accepted disconnected roads")
 +	}
 +}
++
++func TestRoadGeometryRetainsKnownPrefixWhenContinuationUnavailable(t *testing.T) {
++	a, b, c, d := RoadPoint{49, 8}, RoadPoint{49.001, 8}, RoadPoint{49.002, 8}, RoadPoint{49.003, 8}
++	for _, next := range []NextWayResult{{}, {Way: geometryWay(t, []RoadPoint{d, c}), IsForward: true}} {
++		state := &State{CurrentWay: CurrentWay{Way: geometryWay(t, []RoadPoint{a, b}), OnWay: OnWayResult{IsForward: true}},
++			NextWays: []NextWayResult{{Way: geometryWay(t, []RoadPoint{b, c}), IsForward: true}, next}}
++		points, err := GetStateRoadGeometry(state)
++		if err == nil {
++			t.Fatal("expected unavailable/disconnected continuation")
++		}
++		if len(points) != 3 || points[0] != a || points[2] != c {
++			t.Fatal("discarded known prefix or appended invalid branch", points)
++		}
++	}
++	state := &State{NextWays: []NextWayResult{{Way: geometryWay(t, []RoadPoint{a, b}), IsForward: true}}}
++	if points, err := GetStateRoadGeometry(state); err == nil || len(points) != 0 {
++		t.Fatal("invalid current way was not rejected")
++	}
++}
++
++func TestA5LaneOffsetDoesNotFallThroughBoundingBox(t *testing.T) {
++	a, b := RoadPoint{48.984633900000006, 8.436695400000001}, RoadPoint{48.9854086, 8.436626200000001}
++	way := geometryWay(t, []RoadPoint{a, b})
++	way.SetMinLat(a.Latitude)
++	way.SetMaxLat(b.Latitude)
++	way.SetMinLon(b.Longitude)
++	way.SetMaxLon(a.Longitude)
++	way.SetLanes(4)
++	way.SetOneWay(true)
++	way.SetRef("A 5")
++	pos := Position{48.98482347251843, 8.436787386740688, 356.6951235046599}
++	d, err := DistanceToWay(pos, way)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if d.Distance < 7 || d.Distance > 9 {
++		t.Fatal(d.Distance)
++	}
++	on, err := OnWay(way, pos, false)
++	if err != nil || !on.OnWay || !on.IsForward {
++		t.Fatal("rejected recorded lane offset", on, err)
++	}
++	pos.Bearing = 176.6951235046599
++	on, _ = OnWay(way, pos, false)
++	if on.OnWay {
++		t.Fatal("accepted opposing carriageway heading")
++	}
++	pos.Bearing = 356.6951235046599
++	pos.Longitude += .001
++	on, _ = OnWay(way, pos, true)
++	if on.OnWay {
++		t.Fatal("accepted distant road")
++	}
++}
++
++func TestRoadGeometryCanReadAfterMatcherTraversalBudget(t *testing.T) {
++	a, b := RoadPoint{49, 8}, RoadPoint{49.001, 8}
++	way := geometryWay(t, []RoadPoint{a, b})
++	state := &State{CurrentWay: CurrentWay{Way: way, OnWay: OnWayResult{IsForward: true}}}
++	capnp.Struct(way).Message().ResetReadLimit(0)
++	points, err := GetStateRoadGeometry(state)
++	if err != nil || len(points) != 2 {
++		t.Fatal("matcher budget discarded known geometry", points, err)
++	}
++}
+diff --git a/way.go b/way.go
+index 230968d..d7c4df9 100644
+--- a/way.go
++++ b/way.go
+@@ -95 +95,19 @@ func OnWay(way Way, pos Position, extended bool) (OnWayResult, error) {
+-	if pos.Latitude < way.MaxLat()+PADDING && pos.Latitude > way.MinLat()-PADDING && pos.Longitude < way.MaxLon()+PADDING && pos.Longitude > way.MinLon()-PADDING {
++	lanes := way.Lanes()
++	if lanes == 0 {
++		lanes = 2
++	}
++	maxDist := 5 + float64(lanes)*LANE_WIDTH
++	if extended {
++		maxDist *= 2
++	}
++	context := determineRoadContext(way, pos)
++	if context == CONTEXT_FREEWAY {
++		maxDist *= 1.5
++	} else if context == CONTEXT_CITY {
++		maxDist *= .8
++	}
++	// The bounding-box prefilter must cover the same physical radius as the
++	// distance check, including the longitude scale at this latitude.
++	latPadding := maxDist / R * TO_DEGREES
++	lonPadding := latPadding / math.Max(math.Abs(math.Cos(pos.Latitude*TO_RADIANS)), .01)
++	if pos.Latitude < way.MaxLat()+latPadding && pos.Latitude > way.MinLat()-latPadding && pos.Longitude < way.MaxLon()+lonPadding && pos.Longitude > way.MinLon()-lonPadding {
+@@ -99 +116,0 @@ func OnWay(way Way, pos Position, extended bool) (OnWayResult, error) {
+-			res.OnWay = false
+@@ -102,18 +119 @@ func OnWay(way Way, pos Position, extended bool) (OnWayResult, error) {
+-		lanes := way.Lanes()
+-		if lanes == 0 {
+-			lanes = 2
+-		}
+-		road_width_estimate := float64(lanes) * LANE_WIDTH
+-		max_dist := 5 + road_width_estimate
+-		if extended {
+-			max_dist = max_dist * 2
+-		}
+-
+-		context := determineRoadContext(way, pos)
+-		if context == CONTEXT_FREEWAY {
+-			max_dist = max_dist * 1.5
+-		} else if context == CONTEXT_CITY {
+-			max_dist = max_dist * 0.8
+-		}
+-
+-		if d.Distance < max_dist {
++		if d.Distance < maxDist {
+@@ -125 +124,0 @@ func OnWay(way Way, pos Position, extended bool) (OnWayResult, error) {
+-			return res, nil
+@@ -128 +126,0 @@ func OnWay(way Way, pos Position, extended bool) (OnWayResult, error) {
+-	res.OnWay = false

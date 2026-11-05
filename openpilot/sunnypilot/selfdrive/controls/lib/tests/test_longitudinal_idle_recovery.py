@@ -266,6 +266,8 @@ def test_new_approach_can_rearm_after_release_and_scc_override(planner_flow):
   from openpilot.common.constants import CV
   from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanSource
   planner, sm = planner_flow
+  planner.update(sm)
+  assert planner.longitudinal_idle
   sm['carState'].vEgo = 56. * CV.KPH_TO_MS
   planner.update(sm)
   assert planner.speed_limit_approach.released
@@ -276,6 +278,22 @@ def test_new_approach_can_rearm_after_release_and_scc_override(planner_flow):
   planner.update(sm)
   assert not planner.speed_limit_approach.released
   assert planner.longitudinal_idle
+
+
+def test_approach_starting_below_gap_can_enter_idle_after_acceleration(planner_flow):
+  from openpilot.common.constants import CV
+  planner, sm = planner_flow
+  sm['carState'].vEgo = 54. * CV.KPH_TO_MS
+  planner.update(sm)
+  assert not planner.longitudinal_idle
+  assert not planner.speed_limit_approach.released
+  sm['carState'].vEgo = 65. * CV.KPH_TO_MS
+  planner.update(sm)
+  assert planner.longitudinal_idle
+  sm['carState'].vEgo = 56. * CV.KPH_TO_MS
+  planner.update(sm)
+  assert not planner.longitudinal_idle
+  assert planner.speed_limit_approach.released
 
 
 def test_flickering_lead_cannot_reenter_idle_on_missing_frames(planner_flow):

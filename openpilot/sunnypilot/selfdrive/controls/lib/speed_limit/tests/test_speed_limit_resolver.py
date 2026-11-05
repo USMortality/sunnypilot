@@ -491,13 +491,49 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
       assert resolver.speed_limit == current
       assert resolver.speed_limit_final_last == current
       assert resolver.distance == 0.
-    assert not resolver.lower_lookahead_active
+    assert resolver.lower_lookahead_active == (upcoming < current)
     sm['liveMapDataSP'].speedLimit = upcoming
     sm['liveMapDataSP'].speedLimitAheadValid = False
     self.observe(resolver, sm, clock, 104., 0.)
     assert resolver.speed_limit == upcoming
     assert resolver.speed_limit_final_last == upcoming
     assert not resolver.lower_lookahead_active
+
+  def test_lower_approach_survives_extrapolated_boundary_until_map_handoff(self, resolver_class, mocker):
+    resolver, sm, clock = self.ahead_scenario(resolver_class, mocker, 100. / 3.6, 70. / 3.6)
+    resolver.policy = Policy.map_data_only
+    for second, distance in [(100., 46.56), (101., 25.57), (102., 4.895)]:
+      self.observe(resolver, sm, clock, second, distance, v_ego=20.)
+    assert resolver.lower_lookahead_active
+    # Replay the logged gap: 4.9 m remaining, then 0.294 s without a new map message.
+    clock.return_value = 102.294
+    resolver.update(20., sm)
+    assert resolver.lower_lookahead_active
+    assert resolver.approach_speed_limit == 70. / 3.6
+    assert resolver.approach_distance == 1.
+    assert resolver.approach_reason == 'awaiting_current_limit_update'
+    assert resolver.speed_limit == 100. / 3.6
+    # The next current-limit observation completes the handoff immediately.
+    sm['liveMapDataSP'].speedLimit = 70. / 3.6
+    sm['liveMapDataSP'].speedLimitAheadValid = False
+    self.observe(resolver, sm, clock, 103., 0., v_ego=20.)
+    assert resolver.speed_limit == 70. / 3.6
+    assert not resolver.lower_lookahead_active
+
+  @parameterized.expand(['stale', 'invalidated'], names=['reason'])
+  def test_boundary_handoff_does_not_keep_stale_or_invalidated_approach(self, resolver_class, mocker, reason):
+    resolver, sm, clock = self.ahead_scenario(resolver_class, mocker)
+    for second, distance in [(100., 30.), (101., 20.), (102., 10.), (103., 0.)]:
+      self.observe(resolver, sm, clock, second, distance)
+    assert resolver.lower_lookahead_active
+    if reason == 'stale':
+      clock.return_value = 103. + LIMIT_MAX_MAP_DATA_AGE + 1.
+      resolver.update(10., sm)
+    else:
+      sm['liveMapDataSP'].speedLimitAheadValid = False
+      self.observe(resolver, sm, clock, 104., 0.)
+    assert not resolver.lower_lookahead_active
+    assert resolver.approach_distance == 0.
 
   def test_approach_percentage_offset_uses_upcoming_limit(self, resolver_class, mocker):
     from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit.common import OffsetType

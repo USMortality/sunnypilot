@@ -240,12 +240,16 @@ class SpeedLimitResolver:
     lookahead_distance = speed_limit * CV.MS_TO_KPH * self.lookahead_speed_factor_down
     if lower_speed_limit_ahead and self.lookahead_lower_limits:
       self.approach_reason = ("upcoming_awaiting_qualification" if not confirmed else
-                              "boundary_reached" if distance_to_speed_limit_ahead <= 0. else
+                              "awaiting_current_limit_update" if distance_to_speed_limit_ahead <= 0. else
                               "outside_lookahead_range" if distance_to_speed_limit_ahead > lookahead_distance else "lower_lookahead_in_range")
-    if (confirmed and self.lookahead_lower_limits and lower_speed_limit_ahead and
-        0. < distance_to_speed_limit_ahead <= lookahead_distance):
+    if (confirmed and self.lookahead_lower_limits and lower_speed_limit_ahead and lookahead_distance > 0. and
+        distance_to_speed_limit_ahead <= lookahead_distance):
       self.approach_speed_limit = next_speed_limit
-      self.approach_distance = distance_to_speed_limit_ahead
+      # The extrapolated distance can reach zero between map updates. Keep the
+      # qualified approach until fresh data confirms/invalidates the boundary;
+      # a positive distance keeps downstream approach control armed. Freshness
+      # and boundary qualification still apply, and the current limit is unchanged.
+      self.approach_distance = max(1., distance_to_speed_limit_ahead)
 
   def _get_source_solution_according_to_policy(self) -> custom.LongitudinalPlanSP.SpeedLimit.Source:
     sources_for_policy = self._policy_to_sources_map[Policy(self.policy)]

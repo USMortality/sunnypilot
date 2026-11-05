@@ -106,7 +106,10 @@ class TomTomMapData:
       self.result = None
       self.status_reason = "invalid_corridor"
       return
-    paths = corridor.request_paths()
+    # A short directed path can still validate a cached current limit. The
+    # minimum query length applies only to new API requests, not cache reuse.
+    paths = corridor.request_paths(minimum_m=0.)
+    fetch_paths = corridor.request_paths()
     self._debug_write("/tmp/tomtom_corridor", f"confidence: {corridor.confidence}\npaths: {len(paths)}\ngeometry_len: {len(corridor.geometry)}\n")
     # A weak match or multiple plausible continuations cannot identify a directed carriageway atomically.
     if corridor.confidence < MIN_MATCH_CONFIDENCE or len(paths) != 1:
@@ -157,7 +160,7 @@ class TomTomMapData:
       self.status_reason = "active_result"
       # Start replenishing before the desired 500 m horizon is exhausted.
       # A moving GPS/window key alone must not cause repeated overlapping calls.
-      if key == self.result_key or not self._refresh_extends_coverage(paths[0], position):
+      if not fetch_paths or key == self.result_key or not self._refresh_extends_coverage(paths[0], position):
         return
     else:
       self.result = None
@@ -166,6 +169,9 @@ class TomTomMapData:
     if cached and self._usable(cached, corridor, paths[0], position, now):
       self.result, self.result_key = cached, key
       self.status_reason = "cache_hit"
+      return
+    if not fetch_paths:
+      self.status_reason = "insufficient_corridor"
       return
     if not self.key or self.future or now < self.retry_after:
       self.status_reason = "missing_api_key" if not self.key else "fetch_pending" if self.future else "retry_backoff"
@@ -232,6 +238,10 @@ class TomTomMapData:
       previous = matched
     usable = previous - progress >= remaining * MIN_PROGRESS_COVERAGE
     self.validation_reason = None if usable else "insufficient_progress_coverage"
+    if usable:
+      # Never advertise an upcoming boundary beyond the topology validated on
+      # this update, even if the cached response extends through a junction.
+      self._validated_horizon = previous
     return usable
 
   def _fetch(self, key, points, heading):
@@ -339,10 +349,11 @@ class TomTomMapData:
     if not self.result:
       return None
     progress, lateral = closest_progress(self.result["geometry"], position, heading=self.heading)
-    if lateral > MAX_POSITION_DISTANCE_M or progress >= polyline_length(self.result["geometry"]):
+    validated_horizon = getattr(self, '_validated_horizon', math.inf)
+    if lateral > MAX_POSITION_DISTANCE_M or progress >= min(polyline_length(self.result["geometry"]), validated_horizon):
       return None
     # Do not advertise limits reached only by an unobserved U-turn prediction.
-    horizon = first_reversal_progress(self.result["geometry"], progress)
+    horizon = min(first_reversal_progress(self.result["geometry"], progress), validated_horizon)
     reference = self.result.get("reference", self.result["geometry"])
     reference_progress, _ = closest_progress(reference, position, heading=self.heading)
     reversal = first_reversal_progress(reference, reference_progress)

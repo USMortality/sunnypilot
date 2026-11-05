@@ -1,4 +1,5 @@
 from openpilot.common.constants import CV
+import pytest
 from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import (
   limit_speed_limit_decel_target,
   no_lead_normal_decel_idle_active,
@@ -154,3 +155,27 @@ def test_approach_resume_cancels_until_new_approach():
   assert not approach.update(True, 15., 25., 1.)
   assert not approach.update(False, 15., 25., 1.)
   assert approach.update(True, 15., 25., 1.)
+
+
+@pytest.mark.parametrize('target_kph,start_kph,peak_kph', [
+  (51., 53.5, 61.2),  # Fiduciastraße, 2026-11-05 09:16 UTC.
+  (61.2, 64.6, 71.4),  # Gustav-Heinemann-Allee, 15:06 UTC.
+  (30.6, 33.7, 44.),  # Killisfeldstraße, 16:45 UTC.
+])
+def test_approach_detected_below_release_speed_can_arm_later(target_kph, start_kph, peak_kph):
+  from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import SpeedLimitApproach
+  approach = SpeedLimitApproach()
+  target, gap = target_kph * CV.KPH_TO_MS, 5. * CV.KPH_TO_MS
+  assert not approach.update(True, target, start_kph * CV.KPH_TO_MS, gap)
+  assert not approach.released
+  assert approach.update(True, target, peak_kph * CV.KPH_TO_MS, gap)
+  assert not approach.update(True, target, target + gap, gap)
+  assert approach.released
+  assert not approach.update(True, target, peak_kph * CV.KPH_TO_MS, gap)
+
+
+def test_driver_cancel_before_approach_arms_still_prevents_coast():
+  from openpilot.sunnypilot.selfdrive.controls.lib.longitudinal_planner import SpeedLimitApproach
+  approach = SpeedLimitApproach()
+  assert not approach.update(True, 15., 10., 1., cancel=True)
+  assert not approach.update(True, 15., 25., 1.)

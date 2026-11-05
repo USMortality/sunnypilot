@@ -594,6 +594,33 @@ def test_current_limit_survives_short_remaining_window_but_not_route_end(adapter
   assert adapter.limits([.007, 0]) is None
 
 
+@pytest.mark.parametrize('end_lat,expect_ahead', [(.003, False), (.0036, True)])
+def test_short_native_corridor_keeps_current_but_only_verified_upcoming(adapter, end_lat, expect_ahead):
+  value = dict(result(), reference=line())
+  adapter.result, adapter.result_key = value, adapter._cache_key(line())
+  # Native geometry briefly shrinks below the API request minimum around a
+  # junction. It still identifies the current road and some distance ahead.
+  points, position = [[.0027, 0], [end_lat, 0]], [.0028, 0]
+  raw = corridor(points, progress=11.)
+  assert not Corridor.parse(raw).request_paths()
+  adapter.update(raw, position, heading=0., now=1)
+  assert adapter.result is value
+  current, ahead, distance = adapter.limits(position)
+  assert current == pytest.approx(50 / 3.6)
+  assert (ahead > 0.) is expect_ahead
+  assert (distance > 0.) is expect_ahead
+  assert adapter.future is None
+  assert adapter.limits([end_lat + .00001, 0]) is None
+
+
+def test_short_native_corridor_cannot_keep_opposite_road_or_trigger_fetch(adapter):
+  adapter.result, adapter.result_key = dict(result(), reference=line()), adapter._cache_key(line())
+  points = [[.0036, 0], [.003, 0]]
+  adapter.update(corridor(points, progress=11.), [.0031, 0], heading=180., now=1)
+  assert adapter.result is None
+  assert adapter.future is None
+
+
 def test_refresh_retains_current_during_offline_retry(adapter):
   adapter.internet_check = Mock(return_value=False)
   points = line()

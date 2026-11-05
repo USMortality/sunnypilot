@@ -110,6 +110,19 @@ GPS jitter, a changed cache key, and short corridors do not trigger repeated
 requests without extending coverage. Network checks and the monthly request
 budget still apply.
 
+A short but unambiguous directed corridor can validate an existing cached
+response even when it is too short for a new API request. Current limits remain
+available only inside that validated corridor; upcoming boundaries beyond its
+end are withheld. Expired responses, opposite directions, and ambiguous or
+invalid geometry still invalidate the result.
+
+Native geometry retains the connected known prefix when a predicted next way
+is absent; it does not bridge the missing continuation. Matching uses a bounding
+box consistent with its existing physical road-width threshold, including the
+longitude scale at the vehicle's latitude. These checks prevent valid motorway
+lane positions from intermittently dropping the map source before the final
+distance and direction checks.
+
 This is a target, not a guarantee: native mapd normally predicts at least about
 500 m, and its curvature output omits initial road nodes. Ambiguous junctions,
 unknown TomTom limits, offline operation, and short native geometry can reduce

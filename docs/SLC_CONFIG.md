@@ -242,4 +242,6 @@ Once qualified and inside the configured lower lookahead range, the upcoming lim
 
 The approach uses its own offset-adjusted target for coast release. Idle/N can operate when cruise ties the current SLC limit, but cannot override inactive SLC, a lower cruise target, SCC control, current-limit overspeed deceleration, or the existing lead/pedal/safety gates. Higher lookahead remains available to the upcoming-limit display, but never permits early acceleration.
 
+An approach first detected below its target plus release gap waits until deceleration is needed; it is not considered completed merely because the car was already slow. Once armed above that threshold, reaching the release gap releases it once. Driver cancellation also prevents arming, and a released approach cannot re-arm from speed noise until a new approach begins.
+
 The feed currently exposes only one upcoming limit and its distance, without a road or boundary ID. Distance progression is an approximation of boundary identity, and fresh publications can still contain cached upstream map data. This does not validate OSM correctness, suppress brief current-limit changes, or retain a confirmed entry after it disappears. Multiple upcoming segments, explicit boundary IDs, and upstream observation timestamps would allow stronger validation later.

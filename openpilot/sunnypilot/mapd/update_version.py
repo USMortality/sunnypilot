@@ -11,9 +11,8 @@ import re
 
 from openpilot.sunnypilot import get_file_hash
 from openpilot.common.basedir import BASEDIR
-from openpilot.sunnypilot.mapd import MAPD_PATH
+from openpilot.sunnypilot.mapd import MAPD_PATH, MAPD_HASH_PATH
 
-MAPD_HASH_PATH = os.path.join(BASEDIR, "openpilot", "sunnypilot", "mapd", "tests", "mapd_hash")
 MAPD_VERSION_PATH = os.path.join(BASEDIR, "openpilot", "sunnypilot", "mapd", "mapd_installer.py")
 
 
@@ -21,7 +20,7 @@ def update_mapd_hash():
   mapd_hash = get_file_hash(MAPD_PATH)
 
   with open(MAPD_HASH_PATH, "w") as f:
-    f.write(mapd_hash)
+    f.write(mapd_hash + "\n")
 
   print(f"Generated and updated new mapd hash to {MAPD_HASH_PATH}")
 

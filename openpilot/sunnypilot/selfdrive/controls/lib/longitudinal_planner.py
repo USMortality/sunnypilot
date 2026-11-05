@@ -44,17 +44,27 @@ class SpeedLimitApproach:
   def __init__(self):
     self.target = 0.
     self.released = False
+    self.armed = False
 
   def update(self, active: bool, target: float, v_ego: float, release_gap: float, cancel: bool = False) -> bool:
     if not active or target <= 0.:
       self.target = 0.
       self.released = False
+      self.armed = False
       return False
     if abs(target - self.target) > 0.1 * CV.KPH_TO_MS:
       self.target = target
       self.released = False
-    self.released |= cancel or v_ego <= target + release_gap
-    return not self.released
+      self.armed = False
+    # An upcoming zone can first appear while accelerating below its release
+    # speed. That is not a completed slowdown: arm when decel is first needed.
+    # Once armed, reaching the gap still releases once and cannot re-arm from
+    # speed noise. Explicit driver cancellation applies even before arming.
+    self.released |= cancel or (self.armed and v_ego <= target + release_gap)
+    if self.released or v_ego <= target + release_gap:
+      return False
+    self.armed = True
+    return True
 
 
 def speed_limit_approach_allowed(assist_active: bool, lower_lookahead_active: bool, source,
