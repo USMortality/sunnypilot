@@ -311,6 +311,10 @@ class Modem:
     if not modem_version.startswith("EG25"):
       return
     cmds = [
+      # Travel data profiles can register on GSM while packet data is denied.
+      # Reapply LTE-only mode on initialization to avoid getting stuck on 2G.
+      'AT+QCFG="nwscanmode",3,1',
+
       # clear initial EPS bearer APN (some carriers reject the default)
       'AT+CGDCONT=0,"IP",""',
 
