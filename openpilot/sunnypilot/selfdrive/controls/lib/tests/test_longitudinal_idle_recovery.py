@@ -907,3 +907,57 @@ def test_experimental_switch_updates_running_planner_without_restart(planner_flo
     assert planner.longitudinal_e2e_enabled is enabled
     assert planner.output_should_stop is enabled
     assert (planner.mpc.source == log.LongitudinalPlan.LongitudinalPlanSource.e2e) is enabled
+
+
+@pytest.mark.parametrize('experimental', [False, True])
+def test_l558_release_holds_reduced_speed_before_70_boundary(planner_flow, monkeypatch, experimental):
+  # 2026-11-06: N released at 76.4 with ~240 m to the 70 boundary, then
+  # the old 102 target accelerated the car again. The map stayed qualified.
+  from openpilot.common.constants import CV
+  planner, sm = planner_flow
+  monkeypatch.setitem(planner.update.__func__.__globals__, 'get_longitudinal_e2e_enabled', lambda: experimental)
+  planner.resolver.speed_limit_final_last = 102. * CV.KPH_TO_MS
+  planner.resolver.approach_speed_limit_final = 71.4 * CV.KPH_TO_MS
+  planner.resolver.approach_distance = 417.7
+  planner.v_cruise_kph_prev = sm['carState'].vCruise = 102.
+  sm['carState'].vEgo = 87.6 * CV.KPH_TO_MS
+  sm['modelV2'].action.desiredAcceleration = .5
+  planner.update(sm)
+  assert planner.longitudinal_idle
+  release_speed = planner.resolver.approach_speed_limit_final + 5. * CV.KPH_TO_MS
+  sm['carState'].vEgo = release_speed
+  planner.resolver.approach_distance = 240.
+  for _ in range(60):
+    planner.update(sm)
+    assert not planner.longitudinal_idle
+    assert planner.speed_limit_approach.hold_speed == pytest.approx(release_speed)
+    assert planner.output_a_target <= 0.
+  # The enforced current limit and driver's set speed stay in the current zone.
+  assert planner.resolver.speed_limit_final_last == 102. * CV.KPH_TO_MS
+  assert sm['carState'].vCruise == 102.
+  # Crossing the boundary hands control to the actual new current limit.
+  planner.resolver.lower_lookahead_active = False
+  planner.resolver.speed_limit_final_last = 71.4 * CV.KPH_TO_MS
+  planner.resolver.approach_speed_limit_final = 0.
+  for _ in range(20):
+    planner.update(sm)
+  assert planner.speed_limit_approach.hold_speed == 0.
+  assert planner.output_a_target < 0.
+
+
+def test_driver_override_clears_released_approach_hold(planner_flow, monkeypatch):
+  from openpilot.common.constants import CV
+  planner, sm = planner_flow
+  monkeypatch.setitem(planner.update.__func__.__globals__, 'get_longitudinal_e2e_enabled', lambda: False)
+  planner.update(sm)
+  sm['carState'].vEgo = 56. * CV.KPH_TO_MS
+  planner.update(sm)
+  assert planner.speed_limit_approach.hold_speed > 0.
+  sm['carState'].gasPressed = True
+  planner.update(sm)
+  assert planner.speed_limit_approach.hold_speed == 0.
+  sm['carState'].gasPressed = False
+  for _ in range(60):
+    planner.update(sm)
+  assert not planner.longitudinal_idle
+  assert planner.output_a_target > 0.

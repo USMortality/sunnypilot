@@ -142,7 +142,7 @@ Default: `-0.05`
 
 `speedLimitLowerDecelReleaseGapKph`
 
-Stops the lower-limit decel override once ego speed is within this margin above the adjusted speed-limit target. Example: with a `50 kph` target and `5.0`, the override releases at `55 kph`. This is a one-time release for that target: normal speed control resumes and small speed increases do not re-enter the override. The release margin does not change the final cruise target. With a posted `50 kph` limit and a `+1 kph` speed-limit offset, the adjusted target is `51 kph`, so a `5 kph` release margin releases at `56 kph`.
+Stops the lower-limit decel override once ego speed is within this margin above the adjusted speed-limit target. Example: with a `50 kph` target and `5.0`, the override releases at `55 kph`. This is a one-time coast release for that target: normal speed control resumes with a temporary ceiling at the approach target plus release gap until the boundary. This prevents accelerating back to the old limit; small speed increases do not re-enter the coast override. Explicit driver cancellation clears the temporary ceiling. The release margin does not change the final cruise target. With a posted `50 kph` limit and a `+1 kph` speed-limit offset, the adjusted target is `51 kph`, so a `5 kph` release margin releases at `56 kph`.
 
 Allowed range: `0.0` to `30.0` kph
 
@@ -242,6 +242,6 @@ Once qualified and inside the configured lower lookahead range, the upcoming lim
 
 The approach uses its own offset-adjusted target for coast release. Idle/N can operate when cruise ties the current SLC limit, but cannot override inactive SLC, a lower cruise target, SCC control, current-limit overspeed deceleration, or the existing lead/pedal/safety gates. Higher lookahead permits early acceleration after qualification when its factor is greater than zero.
 
-An approach first detected below its target plus release gap waits until deceleration is needed; it is not considered completed merely because the car was already slow. Once armed above that threshold, reaching the release gap releases it once. Driver cancellation also prevents arming, and a released approach cannot re-arm from speed noise until a new approach begins.
+An approach first detected below its target plus release gap waits until deceleration is needed; it is not considered completed merely because the car was already slow. Once armed above that threshold, reaching the release gap releases coast once and holds the release speed until the current-limit transition. Driver cancellation also prevents arming, and a released approach cannot re-arm from speed noise until a new approach begins.
 
 The feed currently exposes only one upcoming limit and its distance, without a road or boundary ID. Distance progression is an approximation of boundary identity, and fresh publications can still contain cached upstream map data. This does not validate OSM correctness or retain a confirmed entry after it disappears. TomTom separately suppresses higher-limit islands of at most 75 m bounded by the same lower limit within the validated route. Multiple upcoming segments, explicit boundary IDs, and upstream observation timestamps would allow stronger validation later.

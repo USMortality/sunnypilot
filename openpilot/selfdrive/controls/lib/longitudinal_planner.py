@@ -220,12 +220,19 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       v_cruise, self.resolver.approach_speed_limit_final, speed_limit_current_limit_decel)
     # Track this approach even while another source temporarily blocks coast.
     # Otherwise SCC priority clears the release/cancel latch and re-arms N.
+    approach_cancel = reset_state or cruise_up_pressed or cruise_target_increased or sm['carState'].gasPressed
     approach_active = self.speed_limit_approach.update(
       self.speed_limit_no_brake and self.resolver.lower_lookahead_active,
       self.resolver.approach_speed_limit_final, v_ego, no_brake_release_gap,
-      cancel=reset_state or cruise_up_pressed or cruise_target_increased or sm['carState'].gasPressed,
+      cancel=approach_cancel,
     )
     approach_active &= approach_allowed
+    # Releasing N finishes the slowdown, not the approach. Hold its release
+    # speed until the map boundary instead of accelerating to the old zone.
+    # Explicit cancellation and lost qualification clear the hold in update().
+    approach_hold_speed = self.speed_limit_approach.hold_speed if approach_allowed else 0.
+    if approach_hold_speed > 0.:
+      v_cruise = min(v_cruise, approach_hold_speed)
     no_brake_for_speed_limit = approach_active and not idle_reentry_blocked and lead_coast_allowed and not has_lead
     # Only idle mode may coast behind a steady lead; fixed/dynamic overrides remain no-lead only.
     if self.no_brake_mode == "idle":
@@ -338,12 +345,17 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
       # approach from a coast request that was blocked before CAN handoff.
       idle_changed = self.longitudinal_idle != getattr(self, '_logged_longitudinal_idle', False)
       logger.log("slc_coast", lambda: (self.longitudinal_idle, speed_limit_idle, approach_allowed, e2e_blocks_idle,
-                                      any_should_stop, self.fcw, lead_coast_allowed, reset_state), lambda: {
+                                      any_should_stop, self.fcw, lead_coast_allowed, reset_state,
+                                      self.speed_limit_approach.released, approach_hold_speed, approach_cancel), lambda: {
         "resolver_decision_mono_time_ns": getattr(self.resolver, 'last_decision_event_ns', None),
         "idle_active": self.longitudinal_idle,
         "qualified_approach_requested": speed_limit_idle,
         "approach_allowed": approach_allowed,
         "approach_released": self.speed_limit_approach.released,
+        "approach_hold_speed_mps": approach_hold_speed,
+        "approach_cancel_requested": approach_cancel,
+        "ego_mps": v_ego,
+        "approach_release_gap_mps": no_brake_release_gap,
         "approach_target_mps": self.resolver.approach_speed_limit_final,
         "e2e_selected": selected_source == LongitudinalPlanSource.e2e,
         "e2e_blocks_idle": e2e_blocks_idle,
