@@ -104,7 +104,7 @@ Default: `0.0`
 
 `speedLimitLookaheadFactorUp`
 
-Controls the upcoming higher-limit display range. Higher limits never change the enforced target before the selected source reports the new current limit.
+Controls higher-limit anticipation and the upcoming higher-limit display range. A qualified upcoming higher map limit becomes the target within `upcoming limit (km/h) × factor` metres. This permits acceleration before the sign. Set `0.0` to wait for the current limit to change. Source policy still applies, and engagement initially uses the current zone.
 
 Allowed range: `0.0` to `10.0`
 
@@ -234,14 +234,14 @@ Accel/resume cancels the current lower-limit approach until a new approach/targe
 
 ## Rapid limit changes and car-first selection
 
-Car-first prefers the car's current limit, but a selected upcoming map limit can still take priority. At a map segment boundary or when an upcoming entry disappears, selection can return to the car's older limit.
+Car-first prefers the car's current limit. Higher map anticipation follows source policy and cannot override an available car limit in car-first mode.
 
-Upcoming map limits are tracked before they enter the configured lookahead range. A candidate qualifies after fresh map messages span at least 1.5 seconds with the same limit and a consistent approaching boundary. Distance is checked against estimated travel between observations (15 m tolerance); a changed limit, distance jump, missing candidate, stale map, or observation gap over 2.5 seconds restarts qualification. Re-reading the same message cannot qualify it. Qualification gates the lower-limit approach independently of current-limit enforcement.
+Upcoming map limits are tracked before they enter the configured lookahead range. A candidate qualifies after fresh map messages span at least 1.5 seconds with the same limit and a consistent approaching boundary. Distance is checked against estimated travel between observations (15 m tolerance); a changed limit, distance jump, missing candidate, stale map, or observation gap over 2.5 seconds restarts qualification. Re-reading the same message cannot qualify it. Qualification gates lower-limit approaches and higher-limit anticipation independently of current-limit observations.
 
-Once qualified and inside the configured lower lookahead range, the upcoming limit supplies a separate approach target and distance. It does not replace the enforced current limit or trigger early acceptance. There is no braking-distance or imminent-boundary bypass of qualification. Missing, stale, changed, or passed upcoming boundaries clear the approach. Both lower and higher enforced limits change only when the selected source reports a new current limit, subject to GPS/map accuracy and publication timing. An estimated upcoming distance reaching zero alone does not change the current limit.
+Once qualified and inside the configured lower lookahead range, the upcoming limit supplies a separate approach target and distance. It does not replace the enforced current limit or trigger early acceptance. There is no braking-distance or imminent-boundary bypass of qualification. Missing, stale, changed, or passed upcoming boundaries clear the approach. Lower enforced limits change when the selected source reports a new current limit, subject to GPS/map accuracy and publication timing. Higher limits can apply early within the configured up lookahead range after boundary qualification. For lower limits, an estimated upcoming distance reaching zero alone does not change the enforced limit.
 
-The approach uses its own offset-adjusted target for coast release. Idle/N can operate when cruise ties the current SLC limit, but cannot override inactive SLC, a lower cruise target, SCC control, current-limit overspeed deceleration, or the existing lead/pedal/safety gates. Higher lookahead remains available to the upcoming-limit display, but never permits early acceleration.
+The approach uses its own offset-adjusted target for coast release. Idle/N can operate when cruise ties the current SLC limit, but cannot override inactive SLC, a lower cruise target, SCC control, current-limit overspeed deceleration, or the existing lead/pedal/safety gates. Higher lookahead permits early acceleration after qualification when its factor is greater than zero.
 
 An approach first detected below its target plus release gap waits until deceleration is needed; it is not considered completed merely because the car was already slow. Once armed above that threshold, reaching the release gap releases it once. Driver cancellation also prevents arming, and a released approach cannot re-arm from speed noise until a new approach begins.
 
-The feed currently exposes only one upcoming limit and its distance, without a road or boundary ID. Distance progression is an approximation of boundary identity, and fresh publications can still contain cached upstream map data. This does not validate OSM correctness, suppress brief current-limit changes, or retain a confirmed entry after it disappears. Multiple upcoming segments, explicit boundary IDs, and upstream observation timestamps would allow stronger validation later.
+The feed currently exposes only one upcoming limit and its distance, without a road or boundary ID. Distance progression is an approximation of boundary identity, and fresh publications can still contain cached upstream map data. This does not validate OSM correctness or retain a confirmed entry after it disappears. TomTom separately suppresses higher-limit islands of at most 75 m bounded by the same lower limit within the validated route. Multiple upcoming segments, explicit boundary IDs, and upstream observation timestamps would allow stronger validation later.

@@ -129,3 +129,10 @@ unknown TomTom limits, offline operation, and short native geometry can reduce
 coverage. We never extrapolate a limit across an unknown section or assume an
 unobserved U-turn. Audit events record the response and native corridor lengths
 ahead, the 500 m target, and the refresh threshold for drive analysis.
+
+Short higher-limit islands of at most 75 m, bounded on both sides by the same
+known lower limit within the validated route, retain that lower target. Adjacent
+API elements with the same limit count as one zone. This avoids unnecessary
+acceleration/braking cycles for data such as the recorded 46.7 m 60 → 100 → 60
+section on Neureuter Straße. This conservative filter can also suppress a real
+short increase; it never raises a lower limit. Raw cached responses remain intact.

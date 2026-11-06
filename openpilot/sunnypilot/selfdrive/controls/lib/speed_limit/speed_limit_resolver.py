@@ -234,8 +234,7 @@ class SpeedLimitResolver:
 
     confirmed = self._confirm_map_ahead(next_speed_limit, map_data.speedLimitAheadDistance,
                                         sm.logMonoTime['liveMapDataSP'] * 1e-9)
-    # Anticipation never replaces the current limit. Only a fresh current-limit
-    # observation can move the enforced target across a mapped boundary.
+    # Lower limits use a separate approach target until the boundary.
     lower_speed_limit_ahead = speed_limit > 0. and 0. < next_speed_limit < speed_limit
     lookahead_distance = speed_limit * CV.MS_TO_KPH * self.lookahead_speed_factor_down
     if lower_speed_limit_ahead and self.lookahead_lower_limits:
@@ -271,6 +270,21 @@ class SpeedLimitResolver:
     """Get limit solutions from each data source"""
     self._get_from_car_state(sm)
     self._get_from_map_data(sm)
+
+    # Higher-limit anticipation follows the configured map source policy. Keep
+    # engagement on the current zone and require a stable, fresh boundary just
+    # as for lower-limit approaches. A zero factor disables anticipation.
+    map_data = sm['liveMapDataSP']
+    current_map_limit = self.limit_solutions[SpeedLimitSource.map]
+    upcoming = map_data.speedLimitAhead if map_data.speedLimitAheadValid else 0.
+    up_range = upcoming * CV.MS_TO_KPH * self.lookahead_speed_factor_up
+    map_age = time.monotonic() - sm.logMonoTime['liveMapDataSP'] * 1e-9
+    upcoming_distance = max(0., map_data.speedLimitAheadDistance - self.v_ego * map_age)
+    if (not current_only and self._ahead_confirmed and current_map_limit > 0. and upcoming > current_map_limit and
+        up_range > 0. and upcoming_distance <= up_range):
+      self.limit_solutions[SpeedLimitSource.map] = upcoming
+      self.map_limit_unlimited = self.map_ahead_unlimited
+      self.map_decision_reason = "higher_lookahead_in_range"
 
     if current_only:
       self.map_decision_reason = "engagement_current_limit_only"

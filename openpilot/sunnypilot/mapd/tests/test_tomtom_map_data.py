@@ -733,3 +733,35 @@ def test_successful_refill_replenishes_window_before_500m_is_exhausted(adapter):
   assert remaining_after > 1000
   assert adapter.limits([.002, 0])[0] == pytest.approx(50 / 3.6)
   adapter.executor.submit.assert_called_once()
+
+
+def test_neureuter_strasse_recorded_short_100_between_60_sections():
+  # Recorded 2026-11-06: TomTom marked 46.7 m as 100, including on refetch.
+  points = [[49.0317088, 8.3601478], [49.0326892, 8.3605219],
+            [49.033011, 8.3606346], [49.0330996, 8.3606547], [49.0337017, 8.3608425]]
+  payload = {'route': [
+    {'geometry': {'coordinates': [[lon, lat] for lat, lon in geometry]},
+     'properties': {'confidence': .95, 'speedLimits': [{'type': 'Maximum', 'value': speed, 'unit': 'kmph'}]}}
+    for geometry, speed in [(points[:2], 60), (points[1:4], 100), (points[3:], 60)]]}
+  adapter = TomTomMapData.__new__(TomTomMapData)
+  adapter.result, adapter.heading = adapter._parse_response(payload), 13.
+  for position in (points[0], [49.0327533885, 8.3605247727], [49.0330636825, 8.3606333924], [49.0332283983, 8.3606855897]):
+    assert adapter.limits(position) == pytest.approx((60 / 3.6, 0., 0.))
+  assert adapter.result['sections'][1]['speed'] == pytest.approx(100 / 3.6)
+
+
+@pytest.mark.parametrize('middle,length,following,expected', [
+  (100, 50, 60, 60), (100, 100, 60, 100), (30, 50, 60, 30),
+  (100, 50, 80, 100), (100, 50, None, 100),
+])
+def test_short_increase_filter_preserves_lower_long_and_open_zones(middle, length, following, expected):
+  adapter = TomTomMapData.__new__(TomTomMapData)
+  adapter.result = {'sections': [
+    {'start': 0., 'end': 100., 'speed': 60.},
+    {'start': 100., 'end': 100. + length / 2, 'speed': float(middle)},
+    {'start': 100. + length / 2, 'end': 100. + length, 'speed': float(middle)},
+    {'start': 100. + length, 'end': 300., 'speed': following},
+  ]}
+  assert adapter._limit_sections(300.)[1]['speed'] == expected
+  # Never infer a return to the old speed from unvalidated future topology.
+  assert adapter._limit_sections(100. + length)[1]['speed'] == middle

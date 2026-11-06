@@ -35,6 +35,7 @@ END_COVERAGE_TOLERANCE_M = 120.0
 MAX_DETOUR_RATIO = 1.35
 MAX_DETOUR_EXTRA_M = 100.0
 CACHE_TTL_S = 30 * 86400.0
+MAX_SHORT_INCREASE_M = 75.0
 
 
 def internet_available():
@@ -344,6 +345,30 @@ class TomTomMapData:
     self.validation_reason = None
     return True
 
+  def _limit_sections(self, horizon):
+    # API road IDs split a speed zone into several elements. Judge the complete
+    # run, so splitting a real longer zone cannot make it look like a spike.
+    runs = []
+    for section in self.result["sections"]:
+      if (runs and runs[-1]["speed"] == section["speed"] and
+          runs[-1].get("unlimited", False) == section.get("unlimited", False) and
+          math.isclose(runs[-1]["end"], section["start"], abs_tol=.01)):
+        runs[-1]["end"] = section["end"]
+      else:
+        runs.append(dict(section))
+    filtered = [dict(run) for run in runs]
+    for i in range(1, len(runs) - 1):
+      before, run, after = runs[i - 1:i + 2]
+      if (before["speed"] is not None and run["speed"] is not None and before["speed"] == after["speed"] and
+          before.get("unlimited", False) == after.get("unlimited", False) and run["speed"] > before["speed"] and
+          0. < run["end"] - run["start"] <= MAX_SHORT_INCREASE_M and run["end"] < horizon and
+          math.isclose(before["end"], run["start"], abs_tol=.01) and math.isclose(run["end"], after["start"], abs_tol=.01)):
+        # A short rise returning to the same lower limit is not worth an
+        # acceleration/braking cycle. Raw cached provider data stays intact.
+        filtered[i]["speed"] = before["speed"]
+        filtered[i]["unlimited"] = before.get("unlimited", False)
+    return filtered
+
   def limits(self, position):
     self.current_unlimited = self.ahead_unlimited = False
     if not self.result:
@@ -362,7 +387,7 @@ class TomTomMapData:
                                     minimum_progress=progress, heading=self.heading)
       horizon = min(horizon, matched)
     current, upcoming = None, (0.0, 0.0)
-    for section in self.result["sections"]:
+    for section in self._limit_sections(horizon):
       if section["start"] <= progress <= section["end"]:
         current = section["speed"]
         self.current_unlimited = section.get("unlimited", False)

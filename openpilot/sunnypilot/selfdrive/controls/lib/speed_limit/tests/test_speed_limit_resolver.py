@@ -191,7 +191,7 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
     assert resolver.distance == 0.
     assert not resolver.lower_lookahead_active
     resolver.update(15., sm)
-    assert resolver.speed_limit == 20.
+    assert resolver.speed_limit == (30. if policy == Policy.map_data_only else 20.)
     assert resolver.distance == 0.
 
   def test_engagement_does_not_reuse_stale_current_map_limit(self, resolver_class, mocker):
@@ -260,7 +260,7 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
     assert resolver.distance == 0.
     assert 49. < resolver.approach_distance < 51.
 
-  def test_higher_map_speed_limit_waits_despite_up_lookahead(self, resolver_class, mocker):
+  def test_higher_map_speed_limit_applies_inside_up_lookahead(self, resolver_class, mocker):
     resolver = resolver_class()
     resolver.policy = Policy.map_data_only
     resolver.lookahead_speed_factor_up = 1.0
@@ -273,7 +273,7 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
     confirm_ahead(resolver, sm_mock, 10.)
     resolver.update(10., sm_mock)
 
-    assert resolver.speed_limit == 10.
+    assert resolver.speed_limit == 20.
     assert resolver.distance == 0.
     assert not resolver.lower_lookahead_active
 
@@ -483,9 +483,10 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
 
 
   @parameterized.expand([(30., 20.), (20., 30.)], names=['current', 'upcoming'])
-  def test_enforcement_waits_for_current_limit_even_when_ahead_distance_reaches_zero(self, resolver_class, mocker, current, upcoming):
+  def test_enforcement_waits_at_zero_distance_when_higher_anticipation_disabled(self, resolver_class, mocker, current, upcoming):
     resolver, sm, clock = self.ahead_scenario(resolver_class, mocker, current, upcoming)
     resolver.policy = Policy.map_data_only
+    resolver.lookahead_speed_factor_up = 0.
     for second, distance in [(100., 30.), (101., 20.), (102., 10.), (103., 0.)]:
       self.observe(resolver, sm, clock, second, distance)
       assert resolver.speed_limit == current

@@ -76,12 +76,14 @@ def test_lower_approach_coasts_without_enforcing_until_boundary(boundary_planner
   assert resolver.approach_speed_limit_final == 0.
 
 
-def test_higher_limit_never_accelerates_before_current_map_transition(boundary_planner):
+def test_higher_limit_anticipates_only_after_qualification(boundary_planner):
   planner, observe = boundary_planner
-  for second, distance in [(100., 90.), (101., 60.), (102., 30.), (103., 0.)]:
-    assert observe(second, distance, current=20., upcoming=30.) == 20.
-    assert not planner.resolver.lower_lookahead_active
-  assert observe(104., 0., current=30., upcoming=0.) == 30.
+  assert observe(100., 90., current=20., upcoming=30.) == 20.
+  assert observe(101., 60., current=20., upcoming=30.) == 20.
+  assert observe(102., 30., current=20., upcoming=30.) == 30.
+  assert not planner.resolver.lower_lookahead_active
+  assert planner.resolver.map_decision_reason == 'higher_lookahead_in_range'
+  assert observe(103., 0., current=30., upcoming=0.) == 30.
 
 
 def test_disappearing_upcoming_limit_does_not_change_assist_target(boundary_planner):
@@ -106,11 +108,13 @@ def test_approach_cannot_override_other_controls(assist, source, cruise, current
                                                         cruise, 20., current_decel)
 
 
-def test_higher_current_limit_updates_cruise_without_extra_confirmation(boundary_planner):
+@pytest.mark.parametrize('up_factor', [0., 4.])
+def test_higher_limit_updates_cruise_without_extra_confirmation(boundary_planner, up_factor):
   from openpilot.cereal import custom
   from openpilot.common.constants import CV
   from openpilot.sunnypilot.selfdrive.car.cruise_ext import VCruiseHelperSP
   planner, observe = boundary_planner
+  planner.resolver.lookahead_speed_factor_up = up_factor
   helper = VCruiseHelperSP.__new__(VCruiseHelperSP)
   helper.v_cruise_kph = helper.v_cruise_cluster_kph = 72.
   helper.v_cruise_min = 0.
@@ -129,9 +133,26 @@ def test_higher_current_limit_updates_cruise_without_extra_confirmation(boundary
   for second, distance in [(100., 90.), (101., 60.), (102., 30.), (103., 0.)]:
     assert observe(second, distance, current=20., upcoming=30., cruise=20.) == 20.
     receive_plan()
-    assert helper.v_cruise_kph == 72.
+    assert helper.v_cruise_kph == pytest.approx(108. if up_factor > 0. and second >= 102. else 72.)
   observe(104., 0., current=30., upcoming=0., cruise=20.)
   assert planner.sla.is_active
   receive_plan()
   assert helper.v_cruise_kph == pytest.approx(108.)
   assert observe(105., 0., current=30., upcoming=0., cruise=helper.v_cruise_kph * CV.KPH_TO_MS) == 30.
+
+
+@pytest.mark.parametrize('factor,distance,expected', [(0., 30., 20.), (1., 120., 20.), (1., 30., 30.)])
+def test_higher_lookahead_range_and_disable(boundary_planner, factor, distance, expected):
+  planner, observe = boundary_planner
+  planner.resolver.lookahead_speed_factor_up = factor
+  observe(100., distance + 60., current=20., upcoming=30.)
+  observe(101., distance + 30., current=20., upcoming=30.)
+  assert observe(102., distance, current=20., upcoming=30.) == expected
+
+
+def test_higher_lookahead_disappearing_boundary_restores_current_limit(boundary_planner):
+  planner, observe = boundary_planner
+  observe(100., 90., current=20., upcoming=30.)
+  observe(101., 60., current=20., upcoming=30.)
+  assert observe(102., 30., current=20., upcoming=30.) == 30.
+  assert observe(103., 0., current=20., upcoming=0.) == 20.
