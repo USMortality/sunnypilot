@@ -173,14 +173,15 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
     assert resolver.approach_distance == 0.
     assert not resolver.lower_lookahead_active
 
-  @parameterized.expand([(Policy.map_data_only,), (Policy.car_state_priority,)], names=["policy"])
-  def test_engagement_resolves_current_zone_before_lookahead(self, resolver_class, policy, mocker):
+  @parameterized.expand([(policy, car_limit) for policy in (Policy.map_data_only, Policy.car_state_priority)
+                         for car_limit in (0., 20.)], names=["policy", "car_limit"])
+  def test_engagement_resolves_current_zone_before_lookahead(self, resolver_class, policy, car_limit, mocker):
     resolver = resolver_class()
     resolver.frame = 1
     resolver.policy = policy
     resolver.lookahead_speed_factor_up = 1.0
     sm = setup_sm_mock(mocker)
-    sm['carStateSP'].speedLimit = 20.
+    sm['carStateSP'].speedLimit = car_limit
     sm['liveMapDataSP'].speedLimit = 20.
     sm['liveMapDataSP'].speedLimitAhead = 30.
     sm['liveMapDataSP'].speedLimitAheadValid = True
@@ -191,7 +192,7 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
     assert resolver.distance == 0.
     assert not resolver.lower_lookahead_active
     resolver.update(15., sm)
-    assert resolver.speed_limit == (30. if policy == Policy.map_data_only else 20.)
+    assert resolver.speed_limit == (30. if policy == Policy.map_data_only or car_limit == 0. else 20.)
     assert resolver.distance == 0.
 
   def test_engagement_does_not_reuse_stale_current_map_limit(self, resolver_class, mocker):

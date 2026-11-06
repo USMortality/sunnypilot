@@ -346,6 +346,12 @@ class TomTomMapData:
     return True
 
   def _limit_sections(self, horizon):
+    """Filter short increases before horizon, in metres from response geometry start.
+
+    The horizon bounds validated forward topology and excludes predicted reversals;
+    a return to the lower limit must begin strictly before it to justify filtering.
+    Raw cached sections are never modified.
+    """
     # API road IDs split a speed zone into several elements. Judge the complete
     # run, so splitting a real longer zone cannot make it look like a spike.
     runs = []

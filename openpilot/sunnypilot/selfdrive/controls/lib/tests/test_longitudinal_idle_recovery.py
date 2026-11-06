@@ -945,7 +945,8 @@ def test_l558_release_holds_reduced_speed_before_70_boundary(planner_flow, monke
   assert planner.output_a_target < 0.
 
 
-def test_driver_override_clears_released_approach_hold(planner_flow, monkeypatch):
+@pytest.mark.parametrize('override', ['gas', 'cruise_up', 'cruise_increase'])
+def test_driver_override_clears_released_approach_hold(planner_flow, monkeypatch, override):
   from openpilot.common.constants import CV
   planner, sm = planner_flow
   monkeypatch.setitem(planner.update.__func__.__globals__, 'get_longitudinal_e2e_enabled', lambda: False)
@@ -953,10 +954,17 @@ def test_driver_override_clears_released_approach_hold(planner_flow, monkeypatch
   sm['carState'].vEgo = 56. * CV.KPH_TO_MS
   planner.update(sm)
   assert planner.speed_limit_approach.hold_speed > 0.
-  sm['carState'].gasPressed = True
+  if override == 'gas':
+    sm['carState'].gasPressed = True
+  elif override == 'cruise_up':
+    from opendbc.car.structs import car
+    sm['carState'].buttonEvents = [NS(pressed=True, type=car.CarState.ButtonEvent.Type.accelCruise)]
+  else:
+    sm['carState'].vCruise += 1.
   planner.update(sm)
   assert planner.speed_limit_approach.hold_speed == 0.
   sm['carState'].gasPressed = False
+  sm['carState'].buttonEvents = []
   for _ in range(60):
     planner.update(sm)
   assert not planner.longitudinal_idle
