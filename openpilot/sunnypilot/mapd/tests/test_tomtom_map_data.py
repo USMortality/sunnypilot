@@ -483,23 +483,36 @@ def test_unrelated_or_already_covered_position_does_not_extend_geometry(position
   (float("nan"), None),
   (float("inf"), None),
 ])
-def test_request_headings_are_valid_compass_degrees(adapter, heading, expected):
+def test_request_headings_follow_corridor_and_vehicle_heading_at_start(adapter, heading, expected):
   response = Mock(status_code=200, text="response")
   response.json.return_value = response_payload({"value": 30, "unit": "kmph", "type": "Maximum"})
 
   def request(*args, **kwargs):
     for i, point in enumerate(kwargs["json"]["points"]):
       properties = point["properties"]
-      if expected is None or i >= 2:
-        assert "heading" not in properties
-      else:
-        assert 0 <= properties["heading"] < 360
-        assert properties["heading"] == pytest.approx(expected)
+      assert 0 <= properties["heading"] < 360
+      assert properties["heading"] == pytest.approx(expected if expected is not None and i < 2 else 0.)
     return response
 
   adapter.request = request
   value = adapter._fetch(adapter._cache_key(line()), line(), heading)
   assert value["sections"][0]["speed"] == pytest.approx(30 / 3.6)
+
+
+@pytest.mark.parametrize(("points", "index", "expected"), [
+  ([[0., 0.]], 0, None),
+  ([[0., 0.], [1., 0.]], 0, 0.),
+  ([[0., 0.], [1., 0.]], 1, 0.),
+  ([[0., 0.], [0., 0.], [1., 0.], [1., 0.]], 0, 0.),
+  ([[0., 0.], [0., 0.], [1., 0.], [1., 0.]], 3, 0.),
+  ([[0., 0.], [0., 1.]], 0, 90.),
+])
+def test_geometry_heading_handles_endpoints_and_duplicate_points(points, index, expected):
+  actual = tomtom_map_data.geometry_heading(points, index)
+  if expected is None:
+    assert actual is None
+  else:
+    assert actual == pytest.approx(expected)
 
 
 def test_repeated_road_segment_does_not_look_like_a_reversal(adapter):

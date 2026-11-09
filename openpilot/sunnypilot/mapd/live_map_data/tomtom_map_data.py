@@ -73,6 +73,28 @@ def speed_ms(limit):
   return float(limit["value"]) * factor if factor else None
 
 
+def geometry_heading(points, index):
+  """Return the compass bearing along the directed corridor at a point."""
+  if len(points) < 2:
+    return None
+  if index < len(points) - 1:
+    start, end = points[index], points[index + 1]
+    if start == end:
+      for candidate in range(index + 2, len(points)):
+        if points[candidate] != start:
+          end = points[candidate]
+          break
+  else:
+    end = points[index]
+    start = next((points[candidate] for candidate in range(index - 1, -1, -1) if points[candidate] != end), end)
+  if start == end:
+    return None
+  mean_lat = math.radians((start[0] + end[0]) / 2.)
+  dx = math.radians(end[1] - start[1]) * math.cos(mean_lat)
+  dy = math.radians(end[0] - start[0])
+  return math.degrees(math.atan2(dx, dy)) % 360.
+
+
 class TomTomMapData:
   """Publishing-thread state; the worker only fetches results and writes the locked cache."""
 
@@ -194,8 +216,8 @@ class TomTomMapData:
 
   @staticmethod
   def _cache_key(points):
-    # v2 preserves advisory-only German motorway sections as unrestricted.
-    return "snap-v2:" + fingerprint(points)
+    # v3 preserves unrestricted semantics and adds directed point headings.
+    return "snap-v3:" + fingerprint(points)
 
   def _debug_write(self, path, message, mode="w"):
     if not self.debug_logging:
@@ -256,7 +278,8 @@ class TomTomMapData:
     heading = heading % 360.0 if heading is not None and math.isfinite(heading) else None
     body = {"points": []}
     for i, (lat, lon) in enumerate(points):
-      props = {"heading": heading} if heading is not None and i < 2 else {}
+      point_heading = heading if heading is not None and i < 2 else geometry_heading(points, i)
+      props = {"heading": point_heading} if point_heading is not None else {}
       body["points"].append({"type": "Feature", "geometry": {"type": "Point", "coordinates": [lon, lat]}, "properties": props})
     try:
       response = self.request(ENDPOINT,
@@ -271,7 +294,7 @@ class TomTomMapData:
     parsed["reference"] = points
     # Speed limits rarely change - cache for 30 days
     parsed["expires"] = time.time() + CACHE_TTL_S  # noqa: TID251 — persisted expiry requires wall time.
-    self.cache.put(key, "snap-v2", parsed, "30d-cache", CACHE_TTL_S, persistent=True)
+    self.cache.put(key, "snap-v3", parsed, "30d-cache", CACHE_TTL_S, persistent=True)
     if self.debug_logging:
       summary = (f"geometry: {len(parsed.get('geometry', []))}\nsections: {len(parsed.get('sections', []))}\n" +
                  f"projectedValid: {parsed.get('projectedValid')}\n")

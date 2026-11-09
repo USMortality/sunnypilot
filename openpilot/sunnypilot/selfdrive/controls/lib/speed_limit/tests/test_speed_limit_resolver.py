@@ -408,6 +408,38 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
     assert resolver.speed_limit == 30.
     assert not resolver._ahead_confirmed
 
+  def test_confirmed_higher_lookahead_survives_one_distance_outlier(self, resolver_class, mocker):
+    resolver, sm, clock = self.ahead_scenario(resolver_class, mocker, current=30., upcoming=40.)
+    resolver.policy = Policy.map_data_only
+    resolver.lookahead_speed_factor_up = 4.
+    for second, distance in [(100., 100.), (101., 90.), (102., 80.)]:
+      self.observe(resolver, sm, clock, second, distance)
+    assert resolver._ahead_confirmed
+    assert resolver.speed_limit == 40.
+
+    # Expected distance is 70 m; this 50 m sample is a plausible 20 m outlier.
+    self.observe(resolver, sm, clock, 103., 50.)
+    assert resolver._ahead_confirmed
+    assert resolver.speed_limit == 40.
+
+    self.observe(resolver, sm, clock, 104., 40.)
+    assert resolver._ahead_confirmed
+    assert resolver.speed_limit == 40.
+
+  def test_second_consecutive_distance_outlier_restarts_confirmation(self, resolver_class, mocker):
+    resolver, sm, clock = self.ahead_scenario(resolver_class, mocker, current=30., upcoming=40.)
+    resolver.policy = Policy.map_data_only
+    resolver.lookahead_speed_factor_up = 4.
+    for second, distance in [(100., 100.), (101., 90.), (102., 80.), (103., 50.)]:
+      self.observe(resolver, sm, clock, second, distance)
+    assert resolver._ahead_confirmed
+
+    # A second consecutive inconsistent observation restarts qualification.
+    self.observe(resolver, sm, clock, 104., 10.)
+    assert not resolver._ahead_confirmed
+    assert resolver._ahead_since == 104.
+    assert resolver.speed_limit == 30.
+
   @parameterized.expand([(101., 200., 20.), (103., 70., 20.), (101., 90., 15.)],
                         names=['second', 'distance', 'limit'])
   def test_changed_boundary_or_observation_gap_restarts_confirmation(self, resolver_class, mocker, second, distance, limit):

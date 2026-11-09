@@ -29,15 +29,16 @@ use 130 km/h as the SLC target, without a speed-limit offset. The display shows 
 gray unrestricted sign rather than a numeric maximum. An explicit maximum always
 wins over the recommendation. The car's 253 km/h unrestricted sentinel uses the
 same sign and target when vehicle fallback is selected. Missing limits and other
-advisory speeds are not treated as unrestricted. The `snap-v2` cache keys avoid
-reusing older responses that discarded this distinction.
+advisory speeds are not treated as unrestricted. Versioned cache keys avoid
+reusing responses created without the current request and limit semantics.
 
 The bundled native mapd publishes its full selected directed road geometry through
 `MapRoadGeometry`. This preserves the endpoint nodes removed by curvature
 smoothing in `MapCurvatures`, which could otherwise leave the corridor ending
 behind the vehicle on sparse roads. Python reads that geometry, computes vehicle progress and a
 directed fingerprint, and submits a roughly 200–1,000 m corridor to synchronous
-Snap to Roads. It includes headings when available and requests projected-point
+Snap to Roads. It supplies the vehicle heading at the first two points and the
+directed corridor bearing at every point, then requests projected-point
 status plus route geometry, IDs, confidence, traveled distance, form-of-way, and
 maximum speed limits. The native patch and reproducible build script are in
 `openpilot/third_party/mapd_pfeiferj`. Python supports older native binaries by

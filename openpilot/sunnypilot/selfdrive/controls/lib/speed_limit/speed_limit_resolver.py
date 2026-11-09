@@ -29,6 +29,7 @@ SOURCE_NAMES = {value: name for name, value in SpeedLimitSource.schema.enumerant
 MAP_AHEAD_CONFIRMATION_S = 1.5
 MAP_AHEAD_MAX_OBSERVATION_GAP_S = 2.5
 MAP_AHEAD_BOUNDARY_TOLERANCE_M = 15.
+MAP_AHEAD_CONFIRMED_OUTLIER_TOLERANCE_M = 30.
 SPEED_LIMIT_EQUAL_TOLERANCE = 0.1 * CV.KPH_TO_MS
 
 
@@ -194,6 +195,7 @@ class SpeedLimitResolver:
     self._ahead_distance = 0.
     self._ahead_v_ego = 0.
     self._ahead_confirmed = False
+    self._ahead_distance_outliers = 0
 
   def _confirm_map_ahead(self, next_speed_limit: float, distance: float, stamp: float) -> bool:
     # Qualify before the target enters the configured planning range. Re-reading
@@ -207,14 +209,29 @@ class SpeedLimitResolver:
 
     elapsed = stamp - self._ahead_stamp
     expected_distance = max(0., self._ahead_distance - 0.5 * (self._ahead_v_ego + self.v_ego) * elapsed)
-    same_boundary = (0. < elapsed <= MAP_AHEAD_MAX_OBSERVATION_GAP_S and
-                     abs(next_speed_limit - self._ahead_limit) <= SPEED_LIMIT_EQUAL_TOLERANCE and
-                     abs(distance - expected_distance) <= MAP_AHEAD_BOUNDARY_TOLERANCE_M)
-    if not same_boundary:
+    same_candidate = (0. < elapsed <= MAP_AHEAD_MAX_OBSERVATION_GAP_S and
+                      abs(next_speed_limit - self._ahead_limit) <= SPEED_LIMIT_EQUAL_TOLERANCE)
+    distance_consistent = abs(distance - expected_distance) <= MAP_AHEAD_BOUNDARY_TOLERANCE_M
+    if not same_candidate:
       self._ahead_since = stamp
       self._ahead_confirmed = False
-    elif stamp - self._ahead_since >= MAP_AHEAD_CONFIRMATION_S:
-      self._ahead_confirmed = True
+      self._ahead_distance_outliers = 0
+    elif distance_consistent:
+      self._ahead_distance_outliers = 0
+      if stamp - self._ahead_since >= MAP_AHEAD_CONFIRMATION_S:
+        self._ahead_confirmed = True
+    elif (self._ahead_confirmed and self._ahead_distance_outliers == 0 and distance > 0. and
+          distance < self._ahead_distance and
+          abs(distance - expected_distance) <= MAP_AHEAD_CONFIRMED_OUTLIER_TOLERANCE_M):
+      # Keep a confirmed upcoming boundary through one plausible map-matching/GPS
+      # distance outlier. A second inconsistent observation restarts candidate
+      # qualification; changed limits, missing data and stale messages still
+      # clear it immediately.
+      self._ahead_distance_outliers = 1
+    else:
+      self._ahead_since = stamp
+      self._ahead_confirmed = False
+      self._ahead_distance_outliers = 0
 
     self._ahead_limit = next_speed_limit
     self._ahead_stamp = stamp
