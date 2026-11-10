@@ -1,18 +1,16 @@
 """Opt-in read-only bridge from comma messages to the private SLC webapp.
 
-The webapp is Nuxt/TypeScript. This uses the comma's existing Python runtime;
-it neither serves HTTP nor makes TomTom requests. Remove CONFIG to disable.
+The webapp is Nuxt/TypeScript. This uses the comma's existing Python runtime
+and does not serve HTTP. Remove CONFIG to disable.
 """
 import fcntl
 import gzip
 import json
 import math
-import sqlite3
 import threading
 import time
 import uuid
 from collections import deque
-from contextlib import closing
 from pathlib import Path
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -87,41 +85,6 @@ def batch_prefix(pending, limit_bytes=512 * 1024):
   return selected
 
 
-def cached_corridors(position, now, path='/data/sunnypilot/tomtom-cache.sqlite'):
-  """Export nearby, unexpired persistent records without fetching or matching."""
-  from openpilot.sunnypilot.mapd.live_map_data.corridor import closest_progress, geometry_between, point_at_progress
-
-  if position is None:
-    return []
-  events = []
-  with closing(sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=.1)) as database:
-    rows = database.execute("SELECT cache_key,response,fetched,expires FROM corridors WHERE expires>? AND session_id='persistent' " +
-                            "ORDER BY fetched DESC LIMIT 2048", (now,)).fetchall()
-  for key, raw, fetched, expires in rows:
-    try:
-      response = json.loads(raw)
-      geometry = response['geometry']
-      _, lateral = closest_progress(geometry, [position['latitude'], position['longitude']])
-      if lateral > 1000.:
-        continue
-      sections = []
-      for section in response['sections'][:64]:
-        start = point_at_progress(geometry, section['start'])
-        sections.append({'start_m': section['start'], 'end_m': section['end'],
-                         'limit_kph': round(section['speed'] * 3.6, 1) if section['speed'] is not None else None,
-                         'confidence': section['confidence'], 'road_id': section.get('road_id'),
-                         'unlimited': section.get('unlimited', False),
-                         'start_position': {'latitude': start[0], 'longitude': start[1]},
-                         'geometry': geometry_between(geometry, section['start'], section['end'])})
-      events.append({'event': 'tomtom_cache', 'provider': 'tomtom', 'cache_key': key,
-                     'fetched_at_unix_s': fetched, 'expires_at_unix_s': expires, 'sections': sections})
-      if len(events) >= 64:
-        break
-    except (ValueError, KeyError, TypeError, IndexError):
-      continue
-  return events
-
-
 def run(config):
   import openpilot.cereal.messaging as messaging
   from openpilot.common.swaglog import cloudlog
@@ -144,7 +107,6 @@ def run(config):
       pending.append(event)
 
   def collect():
-    next_cache_scan, exported = 0., set()
     while not stop.is_set():
       try:
         sm = messaging.SubMaster(['liveLocationKalman', 'gpsLocation', 'carState'])
@@ -158,18 +120,6 @@ def run(config):
               if sm.alive['carState'] and sm.valid['carState']:
                 payload['ego_kph'] = float(sm['carState'].vEgo) * 3.6
               add(payload, stamp)
-              if payload['valid'] and time.monotonic() >= next_cache_scan:
-                next_cache_scan = time.monotonic() + 30.
-                try:
-                  for event in cached_corridors(payload['position'], time.time()):  # noqa: TID251 — persisted cache expiry.
-                    key = (event['cache_key'], event['fetched_at_unix_s'])
-                    if key not in exported:
-                      add(event, time.monotonic_ns())
-                      exported.add(key)
-                  if len(exported) > 4096:
-                    exported.clear()
-                except (OSError, sqlite3.Error):
-                  pass
           for message in messaging.drain_sock(logs):
             try:
               record = json.loads(message.logMessage)

@@ -1,6 +1,5 @@
 import gzip
 import json
-import sqlite3
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.error import HTTPError
@@ -8,7 +7,7 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from openpilot.sunnypilot.mapd.tools.telemetry_uploader import batch_prefix, cached_corridors, clean, location_sample, upload
+from openpilot.sunnypilot.mapd.tools.telemetry_uploader import batch_prefix, clean, location_sample, upload
 
 
 def test_nonfinite_gps_values_are_strict_json():
@@ -69,26 +68,6 @@ def test_road_geometry_backlog_is_sent_in_bounded_ordered_batches():
   assert 1 < len(batch) < len(events)
   assert batch == events[:len(batch)]
   assert sum(len(json.dumps(e).encode()) for e in batch) <= 1000
-
-
-def test_cache_export_preserves_provenance_and_ignores_expired_far_or_session_data(tmp_path):
-  path, now = tmp_path / 'cache.sqlite', 1793801000.
-  near = {'geometry': [[49.104, 8.471], [49.106, 8.471]],
-          'sections': [{'start': 0., 'end': 100., 'speed': 70 / 3.6, 'confidence': .98, 'road_id': 'road42'}]}
-  far = {**near, 'geometry': [[48., 8.], [48.002, 8.]]}
-  with sqlite3.connect(path) as database:
-    database.execute('CREATE TABLE corridors(cache_key TEXT,response TEXT,fetched REAL,expires REAL,session_id TEXT)')
-    for key, response, expires, session in [('near', near, now + 50, 'persistent'), ('expired', near, now - 1, 'persistent'),
-                                           ('far', far, now + 50, 'persistent'), ('session', near, now + 50, 'previous-boot')]:
-      database.execute('INSERT INTO corridors VALUES (?,?,?,?,?)', (key, json.dumps(response), now - 100, expires, session))
-  events = cached_corridors({'latitude': 49.104374, 'longitude': 8.470916}, now, path)
-  assert len(events) == 1
-  assert events[0]['event'] == 'tomtom_cache'
-  assert events[0]['cache_key'] == 'near'
-  assert events[0]['fetched_at_unix_s'] == now - 100
-  assert events[0]['expires_at_unix_s'] == now + 50
-  assert events[0]['sections'][0]['limit_kph'] == 70.
-  assert len(events[0]['sections'][0]['geometry']) == 2
 
 
 @pytest.mark.parametrize('redirect', [False, True])

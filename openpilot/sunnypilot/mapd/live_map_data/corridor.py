@@ -1,7 +1,4 @@
-import hashlib
-import json
 import math
-from dataclasses import dataclass
 
 EARTH_RADIUS_M = 6371000.0
 MAX_POSITION_EXTENSION_M = 150.0
@@ -64,21 +61,11 @@ def extend_geometry_to_position(points, position):
   return points
 
 
-def normalized_geometry(points):
-  return [[round(float(p[0]), 6), round(float(p[1]), 6)] for p in points]
-
-
 def road_geometry_window(points, position, heading):
   """Keep full topology endpoints and bound a corridor around the vehicle."""
   points = extend_geometry_to_position(points, position)
   progress, _ = closest_progress(points, position, heading=heading)
   return geometry_between(points, max(0., progress - 50.), progress + 1000.)[:256]
-
-
-def fingerprint(points, forward=True):
-  directed = normalized_geometry(points if forward else list(reversed(points)))
-  canonical = ";".join(f"{lat:.6f},{lon:.6f}" for lat, lon in directed)
-  return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def closest_progress(points, position, minimum_progress=0.0, maximum_progress=math.inf, heading=None):
@@ -109,61 +96,6 @@ def closest_progress(points, position, minimum_progress=0.0, maximum_progress=ma
       best_dist, best_progress = d, walked + t * seg
     walked += seg
   return best_progress, best_dist
-
-
-@dataclass(frozen=True)
-class Corridor:
-  fingerprint: str
-  geometry: list
-  progress_m: float
-  confidence: float
-  continuations: list
-
-  @classmethod
-  def parse(cls, raw):
-    data = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
-    points = data["geometry"]
-    # Support simplified format from MapCurvatures (no version/fingerprint required)
-    if data.get("version") == 1:
-      # Full corridor format with fingerprint validation
-      if not (2 <= len(points) <= 256):
-        raise ValueError("invalid corridor")
-      points = normalized_geometry(points)
-      expected = fingerprint(points, True)
-      if data.get("fingerprint") != expected:
-        raise ValueError("corridor fingerprint mismatch")
-    else:
-      # Simplified format: just geometry and confidence
-      if not (2 <= len(points) <= 256):
-        raise ValueError("invalid corridor")
-      points = normalized_geometry(points)
-      expected = fingerprint(points, True)
-    continuations = data.get("continuations", [])[:3]
-    return cls(expected, points, max(0.0, float(data.get("progressM", 0))),
-               float(data.get("confidence", 0)), continuations)
-
-  def request_paths(self, minimum_m=200.0, maximum_m=1000.0):
-    base = self.geometry
-    paths = [base]
-    for branch in self.continuations:
-      pts = normalized_geometry(branch.get("geometry", []))
-      if len(pts) >= 2 and distance_m(base[-1], pts[0]) <= 30:
-        paths.append(base + pts[1:])
-    answer = []
-    for path in paths[:4]:
-      # Keep the tail around the vehicle and a bounded look-ahead.
-      start = max(0.0, self.progress_m - 50.0)
-      walked, selected = 0.0, []
-      for a, b in zip(path, path[1:], strict=False):
-        seg = distance_m(a, b)
-        if walked + seg >= start and walked <= self.progress_m + maximum_m:
-          if not selected:
-            selected.append(a)
-          selected.append(b)
-        walked += seg
-      if len(selected) >= 2 and polyline_length(selected) >= minimum_m * .7:
-        answer.append(selected)
-    return answer
 
 
 def first_reversal_progress(points, progress=0.0):

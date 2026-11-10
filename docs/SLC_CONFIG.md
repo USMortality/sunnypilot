@@ -12,15 +12,13 @@ The file is JSON, so it cannot contain comments. Restart openpilot after editing
 
 Speed-limit decision logging is enabled by default. Set `"speedLimitDecisionLogging": false`
 in the existing config to disable it; the logging switch reloads within five seconds.
-This is independent of `tomtomDebugLogging`. It uses normal structured `logMessage`
+It uses normal structured `logMessage`
 events and the existing log rotation, without creating additional debug files or
 changing speed-limit decisions.
 
 - `slc_observation`: each map publication (normally 1 Hz), including GPS position,
-  GPS/localizer validity, road name, TT/OSM provenance, current/upcoming limits,
-  distance, cache provenance, confidence, road IDs when available, and up to 64
-  speed sections with estimated boundary positions. TomTom fallback status and
-  validation reasons are included. Credentials and raw API responses are excluded.
+  GPS/localizer validity, road name, OSM provider, current/upcoming limits, and
+  estimated upcoming boundary position when available.
 - `slc_decision`: the vehicle-reported and map candidates, message validity and
   age, source-selection policy, chosen source/limit, offset, current-only engagement
   handling, and upcoming-limit qualification/range decisions.
@@ -244,4 +242,4 @@ The approach uses its own offset-adjusted target for coast release. Idle/N can o
 
 An approach first detected below its target plus release gap waits until deceleration is needed; it is not considered completed merely because the car was already slow. Once armed above that threshold, reaching the release gap releases coast once and holds the release speed until the current-limit transition. Driver cancellation also prevents arming, and a released approach cannot re-arm from speed noise until a new approach begins.
 
-The feed currently exposes only one upcoming limit and its distance, without a road or boundary ID. Distance progression is an approximation of boundary identity, and fresh publications can still contain cached upstream map data. This does not validate OSM correctness or retain a confirmed entry after it disappears. TomTom separately suppresses higher-limit islands of at most 75 m bounded by the same lower limit within the validated route. Multiple upcoming segments, explicit boundary IDs, and upstream observation timestamps would allow stronger validation later.
+The feed currently exposes only one upcoming limit and its distance, without a road or boundary ID. Distance progression is an approximation of boundary identity, and fresh publications can still contain cached upstream map data. This does not validate OSM correctness or retain a confirmed entry after it disappears. Multiple upcoming segments, explicit boundary IDs, and upstream observation timestamps would allow stronger validation later.

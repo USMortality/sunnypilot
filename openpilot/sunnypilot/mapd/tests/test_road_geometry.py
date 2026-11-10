@@ -1,7 +1,7 @@
 """Regression for curvature endpoints missing ahead on sparse OSM ways."""
 import pytest
 
-from openpilot.sunnypilot.mapd.live_map_data.corridor import Corridor, closest_progress, polyline_length, road_geometry_window
+from openpilot.sunnypilot.mapd.live_map_data.corridor import closest_progress, polyline_length, road_geometry_window
 
 
 def test_sparse_road_keeps_forward_nodes_removed_by_curvature_smoothing():
@@ -18,9 +18,7 @@ def test_sparse_road_keeps_forward_nodes_removed_by_curvature_smoothing():
   progress, lateral = closest_progress(geometry, position, heading=heading)
   assert lateral < 2
   assert polyline_length(geometry) - progress > 380
-  paths = Corridor.parse({'geometry': geometry, 'progressM': progress, 'confidence': 1}).request_paths()
-  assert len(paths) == 1
-  assert paths[0][-1] == pytest.approx(points[-1], abs=1e-6)
+  assert geometry[-1] == pytest.approx(points[-1], abs=1e-6)
 
 
 def test_window_locates_vehicle_before_truncating_long_way():

@@ -383,7 +383,7 @@ def test_experimental_switch_preserves_fresh_settings_and_reloads(tmp_path, monk
   reset_slc_config_cache()
   assert slc_config.get_longitudinal_e2e_enabled()
   # Another settings writer changes the file after the UI cached its state.
-  config = {'longitudinalE2EEnabled': True, 'speedLimitLookaheadFactorDown': 6., 'mapProvider': 'tomtom'}
+  config = {'longitudinalE2EEnabled': True, 'speedLimitLookaheadFactorDown': 6., 'customSetting': 'preserved'}
   path.write_text(json.dumps(config))
   slc_config.set_longitudinal_e2e_enabled(False)
   assert not slc_config.get_longitudinal_e2e_enabled()
@@ -405,7 +405,7 @@ def test_experimental_switch_failed_replace_keeps_previous_settings(tmp_path, mo
   import pytest
   path = tmp_path / 'slc.json'
   monkeypatch.setattr(slc_config, 'SLC_CONFIG_PATH', path)
-  original = '{"longitudinalE2EEnabled": true, "mapProvider": "tomtom"}'
+  original = '{"longitudinalE2EEnabled": true, "customSetting": "preserved"}'
   path.write_text(original)
   def fail_replace(*args):
     raise OSError('disk failure')

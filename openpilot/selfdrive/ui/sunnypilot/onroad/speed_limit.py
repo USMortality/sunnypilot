@@ -220,7 +220,7 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
         self._draw_pre_active_arrow(sign_rect)
       else:
         self._draw_ahead_info(sign_rect)
-      # Draw TomTom/OSM source indicator
+      # Map speed limits use native OSM data.
       self._draw_source_indicator(sign_rect)
 
   def _draw_sign_main(self, rect, alpha=1.0):
@@ -350,30 +350,9 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
     self._draw_text_centered(self.font_norm, self._format_dist(self.speed_limit_ahead_dist), 36, rl.Vector2(mid_x, rect.y + 134), Colors.GREY)
 
   def _draw_source_indicator(self, sign_rect):
-    """Draw TT or OSM indicator to the right of speed limit sign."""
+    """Draw the active OSM map source next to the speed limit sign."""
     # Only show if we have a valid speed limit
     if not (self.speed_limit_valid or self.speed_limit_last_valid):
-      return
-
-    # Read runtime source status (written even when diagnostic logging is disabled).
-    source = None
-    color = rl.Color(150, 150, 150, 180)
-    try:
-      with open("/tmp/tomtom_active") as f:
-        content = f.read().strip()
-        if content.startswith("TomTom:"):
-          source = "TT"
-          color = rl.Color(100, 200, 100, 200)
-        elif content.startswith("TomTom retained"):
-          source = "TT"
-          color = rl.Color(230, 180, 80, 200)
-        elif content.startswith("TomTom unavailable"):
-          source = "TT"
-        elif content.startswith("OSM"):
-          source = "OSM"
-    except OSError:
-      pass
-    if source is None:
       return
 
     # Position to the right of sign
@@ -381,7 +360,7 @@ class SpeedLimitRenderer(Widget, SpeedLimitAlertRenderer):
     indicator_y = sign_rect.y + sign_rect.height - 30
 
     # Draw small text indicator
-    rl.draw_text_ex(self.font_demi, source, rl.Vector2(indicator_x, indicator_y), 28, 0, color)
+    rl.draw_text_ex(self.font_demi, "OSM", rl.Vector2(indicator_x, indicator_y), 28, 0, rl.Color(150, 150, 150, 180))
 
   @staticmethod
   def _format_dist(d):

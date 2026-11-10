@@ -253,32 +253,26 @@ def test_map_observation_records_location_provider_and_correlation_id(audit, mon
   from openpilot.sunnypilot.navd.helpers import Coordinate
 
   logger, events, clock = audit
-  monkeypatch.setattr(osm_map_data, "open", mock_open(), raising=False)
   osm = osm_map_data.OsmMapData.__new__(osm_map_data.OsmMapData)
   osm.sm = {'liveLocationKalman': NS(gpsOK=True)}
   osm.pm = Mock()
   osm.mem_params = Mock()
-  osm.mem_params.get.return_value = 'Test Road'
+  osm.mem_params.get.side_effect = lambda key: {
+    'RoadName': 'Test Road', 'MapSpeedLimit': 50 * CV.KPH_TO_MS,
+    'NextMapSpeedLimit': {'speedlimit': 30 * CV.KPH_TO_MS, 'latitude': 48., 'longitude': 8.002},
+  }.get(key)
   osm.last_position = Coordinate(48., 8.)
   osm.native_geometry = [[48., 8.], [48., 8.004]]
   osm.last_bearing = 90.
   osm.localizer_valid = True
-  osm.provider_limits = (50 * CV.KPH_TO_MS, 30 * CV.KPH_TO_MS, 200.)
-  osm.speed_limit_provider = NS(result_key='snap-v1:test', status_reason='cache_hit', validation_reason=None,
-                                last_failure_reason=None, failures=0, key='must-not-be-logged', result={
-    'fetched': 1., 'expires': 2., 'geometry': [[48., 8.], [48.004, 8.]],
-    'sections': [{'start': 0., 'end': 400., 'speed': 50 * CV.KPH_TO_MS, 'confidence': .9, 'road_id': 'road-123'}],
-  })
   osm.decision_logger = logger
   osm.publish()
   published = osm.pm.send.call_args.args[1]
   event = events[-1]
   assert event['event'] == 'slc_observation'
-  assert event['provider'] == 'tomtom'
+  assert event['provider'] == 'osm'
   assert event['position'] == {'latitude': 48., 'longitude': 8.}
   assert event['map_message_mono_time_ns'] == published.logMonoTime
-  assert event['sections'][0]['road_id'] == 'road-123'
-  assert 'must-not-be-logged' not in json.dumps(event)
   clock[0] += 1
   osm.last_position = Coordinate(48.0002, 8.)
   osm.publish()
