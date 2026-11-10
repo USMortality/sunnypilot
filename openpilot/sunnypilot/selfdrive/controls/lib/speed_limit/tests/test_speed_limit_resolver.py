@@ -554,18 +554,81 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
     assert resolver.speed_limit == 70. / 3.6
     assert not resolver.lower_lookahead_active
 
-  @parameterized.expand(['stale', 'invalidated'], names=['reason'])
-  def test_boundary_handoff_does_not_keep_stale_or_invalidated_approach(self, resolver_class, mocker, reason):
+  def test_boundary_handoff_holds_qualified_approach_until_current_limit_updates(self, resolver_class, mocker):
     resolver, sm, clock = self.ahead_scenario(resolver_class, mocker)
     for second, distance in [(100., 30.), (101., 20.), (102., 10.), (103., 0.)]:
       self.observe(resolver, sm, clock, second, distance)
     assert resolver.lower_lookahead_active
-    if reason == 'stale':
-      clock.return_value = 103. + LIMIT_MAX_MAP_DATA_AGE + 1.
-      resolver.update(10., sm)
-    else:
-      sm['liveMapDataSP'].speedLimitAheadValid = False
-      self.observe(resolver, sm, clock, 104., 0.)
+    sm['liveMapDataSP'].speedLimitAheadValid = False
+    self.observe(resolver, sm, clock, 104., 0.)
+    assert resolver.speed_limit == 30.
+    assert resolver.approach_speed_limit == 20.
+    assert resolver.approach_reason == 'boundary_handoff_hold'
+    assert resolver.lower_lookahead_active
+
+    # Promotion of the upcoming limit to current ends the hold immediately.
+    sm['liveMapDataSP'].speedLimit = 20.
+    sm['liveMapDataSP'].speedLimitAheadValid = False
+    self.observe(resolver, sm, clock, 104.2, 0.)
+    assert resolver.speed_limit == 20.
+    assert not resolver.lower_lookahead_active
+    assert resolver.approach_distance == 0.
+
+  def test_boundary_handoff_hold_expires(self, resolver_class, mocker):
+    resolver, sm, clock = self.ahead_scenario(resolver_class, mocker)
+    for second, distance in [(100., 30.), (101., 20.), (102., 10.), (103., 0.)]:
+      self.observe(resolver, sm, clock, second, distance)
+    sm['liveMapDataSP'].speedLimitAheadValid = False
+    self.observe(resolver, sm, clock, 104., 0.)
+    assert resolver.lower_lookahead_active
+
+    # Repeated fresh reports without a current-limit handoff cannot extend it.
+    self.observe(resolver, sm, clock, 104.6, 0.)
+    assert not resolver.lower_lookahead_active
+    assert resolver.approach_distance == 0.
+
+  def test_missing_upcoming_limit_far_from_boundary_clears_approach(self, resolver_class, mocker):
+    resolver, sm, clock = self.ahead_scenario(resolver_class, mocker)
+    resolver.lookahead_speed_factor_down = 10.
+    for second, distance in [(100., 150.), (101., 140.), (102., 130.), (103., 120.), (104., 110.)]:
+      self.observe(resolver, sm, clock, second, distance)
+    assert resolver.lower_lookahead_active
+    sm['liveMapDataSP'].speedLimitAheadValid = False
+    self.observe(resolver, sm, clock, 105., 100.)
+    assert not resolver.lower_lookahead_active
+    assert resolver.approach_distance == 0.
+
+  def test_boundary_handoff_hold_clears_on_stale_data(self, resolver_class, mocker):
+    resolver, sm, clock = self.ahead_scenario(resolver_class, mocker)
+    for second, distance in [(100., 30.), (101., 20.), (102., 10.), (103., 0.)]:
+      self.observe(resolver, sm, clock, second, distance)
+    sm['liveMapDataSP'].speedLimitAheadValid = False
+    self.observe(resolver, sm, clock, 104., 0.)
+    assert resolver.lower_lookahead_active
+
+    clock.return_value = 104. + LIMIT_MAX_MAP_DATA_AGE + 1.
+    resolver.update(10., sm)
+    assert not resolver.lower_lookahead_active
+    assert resolver.approach_distance == 0.
+
+  def test_boundary_handoff_hold_clears_on_new_upcoming_limit(self, resolver_class, mocker):
+    resolver, sm, clock = self.ahead_scenario(resolver_class, mocker)
+    for second, distance in [(100., 30.), (101., 20.), (102., 10.), (103., 0.)]:
+      self.observe(resolver, sm, clock, second, distance)
+    sm['liveMapDataSP'].speedLimitAhead = 25.
+    sm['liveMapDataSP'].speedLimitAheadValid = True
+    self.observe(resolver, sm, clock, 104., 0.)
+    assert resolver.approach_speed_limit == 0.
+    assert not resolver.lower_lookahead_active
+
+  def test_engagement_clears_boundary_handoff_hold(self, resolver_class, mocker):
+    resolver, sm, clock = self.ahead_scenario(resolver_class, mocker)
+    for second, distance in [(100., 30.), (101., 20.), (102., 10.), (103., 0.)]:
+      self.observe(resolver, sm, clock, second, distance)
+    sm['liveMapDataSP'].speedLimitAheadValid = False
+    clock.return_value = 104.
+    sm.logMonoTime['liveMapDataSP'] = int(104. * 1e9)
+    resolver.update(10., sm, current_only=True)
     assert not resolver.lower_lookahead_active
     assert resolver.approach_distance == 0.
 
