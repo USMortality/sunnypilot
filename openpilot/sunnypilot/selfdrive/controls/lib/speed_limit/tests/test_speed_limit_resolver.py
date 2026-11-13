@@ -574,7 +574,7 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
     assert not resolver.lower_lookahead_active
     assert resolver.approach_distance == 0.
 
-  def test_boundary_handoff_hold_expires(self, resolver_class, mocker):
+  def test_boundary_handoff_hold_persists_until_current_limit_updates(self, resolver_class, mocker):
     resolver, sm, clock = self.ahead_scenario(resolver_class, mocker)
     for second, distance in [(100., 30.), (101., 20.), (102., 10.), (103., 0.)]:
       self.observe(resolver, sm, clock, second, distance)
@@ -582,8 +582,14 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
     self.observe(resolver, sm, clock, 104., 0.)
     assert resolver.lower_lookahead_active
 
-    # Repeated fresh reports without a current-limit handoff cannot extend it.
+    # Fresh reports still showing the old current limit mean the boundary has
+    # not been handed off yet, so they must not release the approach.
     self.observe(resolver, sm, clock, 104.6, 0.)
+    assert resolver.lower_lookahead_active
+    assert resolver.approach_speed_limit == 20.
+
+    sm['liveMapDataSP'].speedLimit = 20.
+    self.observe(resolver, sm, clock, 104.8, 0.)
     assert not resolver.lower_lookahead_active
     assert resolver.approach_distance == 0.
 

@@ -30,8 +30,6 @@ MAP_AHEAD_CONFIRMATION_S = 1.5
 MAP_AHEAD_MAX_OBSERVATION_GAP_S = 2.5
 MAP_AHEAD_BOUNDARY_TOLERANCE_M = 15.
 MAP_AHEAD_CONFIRMED_OUTLIER_TOLERANCE_M = 30.
-MAP_AHEAD_BOUNDARY_HANDOFF_MAX_DISTANCE_M = 30.
-MAP_AHEAD_BOUNDARY_HANDOFF_HOLD_S = 1.5
 SPEED_LIMIT_EQUAL_TOLERANCE = 0.1 * CV.KPH_TO_MS
 
 
@@ -102,7 +100,6 @@ class SpeedLimitResolver:
     self.approach_reason = "no_eligible_approach"
     self._boundary_approach_limit = 0.
     self._boundary_approach_current_limit = 0.
-    self._boundary_approach_stamp = 0.
     self._reset_map_ahead_candidate()
     self.decision_logger = SpeedLimitDecisionLogger()
     self.decision_context = {}
@@ -179,7 +176,6 @@ class SpeedLimitResolver:
   def _reset_boundary_approach(self) -> None:
     self._boundary_approach_limit = 0.
     self._boundary_approach_current_limit = 0.
-    self._boundary_approach_stamp = 0.
 
   def _process_map_data(self, sm: messaging.SubMaster) -> None:
     map_data = sm['liveMapDataSP']
@@ -263,23 +259,25 @@ class SpeedLimitResolver:
     confirmed = self._confirm_map_ahead(next_speed_limit, map_data.speedLimitAheadDistance,
                                         sm.logMonoTime['liveMapDataSP'] * 1e-9)
 
-    # Native map matching can stop reporting the upcoming limit just before
-    # it promotes that limit to current. Keep a confirmed lower approach over
-    # that brief boundary handoff, but only when the last observation was close
-    # to the boundary and the current limit has not changed.
+    # Keep the qualified lower target latched if the upcoming report briefly
+    # disappears. The map's current-limit promotion is the boundary handoff.
+    # A timeout here can release the approach before the car reaches the sign.
+    same_current_limit = abs(speed_limit - self._boundary_approach_current_limit) <= SPEED_LIMIT_EQUAL_TOLERANCE
+    same_latched_upcoming = abs(next_speed_limit - self._boundary_approach_limit) <= SPEED_LIMIT_EQUAL_TOLERANCE
+    retain_latched_approach = (self._boundary_approach_limit > 0. and speed_limit > 0. and same_current_limit and
+                               next_speed_limit > 0. and same_latched_upcoming)
     if next_speed_limit <= 0.:
-      handoff_age = time.monotonic() - self._boundary_approach_stamp
-      same_current_limit = abs(speed_limit - self._boundary_approach_current_limit) <= SPEED_LIMIT_EQUAL_TOLERANCE
-      if (self._boundary_approach_limit > 0. and speed_limit > 0. and same_current_limit and
-          0. <= handoff_age <= MAP_AHEAD_BOUNDARY_HANDOFF_HOLD_S):
+      if (self._boundary_approach_limit > 0. and speed_limit > 0. and same_current_limit):
         self.approach_speed_limit = self._boundary_approach_limit
         self.approach_distance = 1.
         self.approach_reason = "boundary_handoff_hold"
       else:
         self._reset_boundary_approach()
     else:
-      # A new valid upcoming report supersedes any pending handoff.
-      self._reset_boundary_approach()
+      # Keep the same qualified target through distance/qualification flicker.
+      # A different upcoming limit or current-limit transition ends this latch.
+      if not retain_latched_approach:
+        self._reset_boundary_approach()
 
     # Lower limits use a separate approach target until the boundary.
     lower_speed_limit_ahead = speed_limit > 0. and 0. < next_speed_limit < speed_limit
@@ -291,16 +289,20 @@ class SpeedLimitResolver:
     if (confirmed and self.lookahead_lower_limits and lower_speed_limit_ahead and lookahead_distance > 0. and
         distance_to_speed_limit_ahead <= lookahead_distance):
       self.approach_speed_limit = next_speed_limit
+      # Latch only once the target enters the configured approach range. Keep
+      # it active through distance flicker and missing reports until mapd
+      # promotes it to current or reports a different boundary.
+      self._boundary_approach_limit = next_speed_limit
+      self._boundary_approach_current_limit = speed_limit
       # The extrapolated distance can reach zero between map updates. Keep the
       # qualified approach until fresh data confirms/invalidates the boundary;
       # a positive distance keeps downstream approach control armed. Freshness
       # and boundary qualification still apply, and the current limit is unchanged.
       self.approach_distance = max(1., distance_to_speed_limit_ahead)
-      if (distance_to_speed_limit_ahead <= MAP_AHEAD_BOUNDARY_HANDOFF_MAX_DISTANCE_M and
-          map_data.speedLimitAheadValid):
-        self._boundary_approach_limit = next_speed_limit
-        self._boundary_approach_current_limit = speed_limit
-        self._boundary_approach_stamp = time.monotonic()
+    elif (retain_latched_approach and self.lookahead_lower_limits and lower_speed_limit_ahead):
+      self.approach_speed_limit = self._boundary_approach_limit
+      self.approach_distance = max(1., distance_to_speed_limit_ahead)
+      self.approach_reason = "lower_lookahead_latched"
 
   def _get_source_solution_according_to_policy(self) -> custom.LongitudinalPlanSP.SpeedLimit.Source:
     sources_for_policy = self._policy_to_sources_map[Policy(self.policy)]
