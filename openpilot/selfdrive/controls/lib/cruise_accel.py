@@ -1,9 +1,9 @@
 """Cruise acceleration and jerk limits, independent of the native MPC solver."""
 import numpy as np
 
-# Final ben comfort tuning, including 186b8e3ee4: 0, 10, 36, 90 and 144 km/h.
+# Breakpoints are in m/s and correspond to 0, 10, 36, 90 and 144 km/h.
 A_CRUISE_MAX_BP = [0., 2.8, 10., 25., 40.]
-A_CRUISE_MAX_VALS = [1.2, 1.1, 0.7, 0.45, 0.35]
+A_CRUISE_MAX_VALS = [1.4, 1.3, 0.7, 0.45, 0.35]
 J_CRUISE_VALS = [1.2, 1.1, 0.8, 0.5, 0.3]
 A_CRUISE_MIN = -0.5
 

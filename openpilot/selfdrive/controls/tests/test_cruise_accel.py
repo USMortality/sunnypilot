@@ -3,8 +3,8 @@ import pytest
 from openpilot.selfdrive.controls.lib.cruise_accel import get_cruise_accel, get_max_accel
 
 
-@pytest.mark.parametrize('speed,expected', [(0., 1.2), (2.8, 1.1), (10., .7), (25., .45), (40., .35), (50., .35),
-                                           (6.4, .9), (17.5, .575), (32.5, .4)])
+@pytest.mark.parametrize('speed,expected', [(0., 1.4), (2.8, 1.3), (10., .7), (25., .45), (40., .35), (50., .35),
+                                           (6.4, 1.0), (17.5, .575), (32.5, .4)])
 def test_final_ben_speed_dependent_comfort_ceiling(speed, expected):
   assert get_max_accel(speed) == pytest.approx(expected)
   acceleration = 0.
