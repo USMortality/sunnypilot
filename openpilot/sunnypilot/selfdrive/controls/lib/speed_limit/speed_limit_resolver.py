@@ -100,6 +100,7 @@ class SpeedLimitResolver:
     self.approach_reason = "no_eligible_approach"
     self._boundary_approach_limit = 0.
     self._boundary_approach_current_limit = 0.
+    self.qualified_lower_limit_promoted = False
     self._reset_map_ahead_candidate()
     self.decision_logger = SpeedLimitDecisionLogger()
     self.decision_context = {}
@@ -178,6 +179,7 @@ class SpeedLimitResolver:
     self._boundary_approach_current_limit = 0.
 
   def _process_map_data(self, sm: messaging.SubMaster) -> None:
+    self.qualified_lower_limit_promoted = False
     map_data = sm['liveMapDataSP']
 
     map_data_mono_time = getattr(sm, 'logMonoTime', {}).get('liveMapDataSP', 0)
@@ -258,6 +260,15 @@ class SpeedLimitResolver:
 
     confirmed = self._confirm_map_ahead(next_speed_limit, map_data.speedLimitAheadDistance,
                                         sm.logMonoTime['liveMapDataSP'] * 1e-9)
+
+    # A matching current-limit promotion confirms that the qualified lower
+    # boundary was crossed. Let SLC distinguish this from an unqualified drop.
+    self.qualified_lower_limit_promoted = (
+      self.lookahead_lower_limits and self._boundary_approach_limit > 0. and self._boundary_approach_current_limit > 0. and
+      speed_limit > 0. and
+      abs(speed_limit - self._boundary_approach_limit) <= SPEED_LIMIT_EQUAL_TOLERANCE and
+      speed_limit < self._boundary_approach_current_limit - SPEED_LIMIT_EQUAL_TOLERANCE
+    )
 
     # Keep the qualified lower target latched if the upcoming report briefly
     # disappears. The map's current-limit promotion is the boundary handoff.
@@ -379,6 +390,7 @@ class SpeedLimitResolver:
     def key():
       return (self.policy, self.source, kph(self.speed_limit), self.speed_limit_unlimited, kph(self.speed_limit_offset), current_only,
               self.map_decision_reason, self.lower_lookahead_active, kph(self.approach_speed_limit_final), self._ahead_confirmed,
+              self.qualified_lower_limit_promoted,
               message_info(sm, "liveMapDataSP")["valid"],
               kph(sm['carStateSP'].speedLimit), kph(sm['liveMapDataSP'].speedLimit), kph(sm['liveMapDataSP'].speedLimitAhead))
     event_ns = self.decision_logger.log("slc_decision", key, lambda: self._decision_snapshot(sm, current_only), force=current_only)
@@ -397,6 +409,7 @@ class SpeedLimitResolver:
         self.map_decision_reason if self.source == SpeedLimitSource.map else "vehicle_limit_selected_by_policy"),
       "map_candidate_reason": self.map_decision_reason,
       "engagement_current_only": current_only,
+      "qualified_lower_limit_promoted": self.qualified_lower_limit_promoted,
       "ego_kph": kph(self.v_ego),
       "vehicle_reported_kph": kph(sm['carStateSP'].speedLimit),
       "vehicle_message": car_info,

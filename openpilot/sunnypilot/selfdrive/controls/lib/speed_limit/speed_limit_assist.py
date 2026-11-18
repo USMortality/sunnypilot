@@ -98,6 +98,7 @@ class SpeedLimitAssist:
     self.auto_accepted_this_cycle = False
     self.long_override = False
     self.suspicious_drop_this_cycle = False
+    self.qualified_lower_limit_promoted = False
 
     # TODO-SP: SLA's own output_a_target for planner
     # Solution functions mapped to respective states
@@ -380,9 +381,11 @@ class SpeedLimitAssist:
       events_sp.add(EventNameSP.speedLimitPending)
 
   def update(self, long_enabled: bool, long_override: bool, v_ego: float, a_ego: float, v_cruise_cluster: float, speed_limit: float,
-             speed_limit_final_last: float, has_speed_limit: bool, distance: float, events_sp: EventsSP) -> None:
+             speed_limit_final_last: float, has_speed_limit: bool, distance: float, events_sp: EventsSP,
+             qualified_lower_limit_promoted: bool = False) -> None:
     self.long_enabled = long_enabled
     self.long_override = long_override
+    self.qualified_lower_limit_promoted = qualified_lower_limit_promoted
     self.auto_accepted_this_cycle = False
     self.decision_reason = "holding_state"
     self.v_ego = v_ego
@@ -410,6 +413,15 @@ class SpeedLimitAssist:
       self.is_enabled, self.is_active = True, True
       self.auto_accepted_this_cycle = True
       self.decision_reason = "current_limit_auto_accepted_on_engagement"
+    elif (self.qualified_lower_limit_promoted and self.speed_limit_changed and self.long_enabled and self.enabled and
+          not long_override and not self.v_cruise_cluster_changed and
+          self.state in (SpeedLimitAssistState.active, SpeedLimitAssistState.adapting,
+                         SpeedLimitAssistState.pending, SpeedLimitAssistState.preActive)):
+      # The new current limit matches a lower boundary already qualified by
+      # lookahead. Accept this transition without the generic large-drop guard.
+      self._update_confirmed_state()
+      self.is_enabled, self.is_active = True, True
+      self.decision_reason = "qualified_lower_boundary_promoted"
     elif self.pcm_op_long:
       self.is_enabled, self.is_active = self.update_state_machine_pcm_op_long()
     else:
@@ -456,6 +468,7 @@ class SpeedLimitAssist:
       "state": state_names[self.state],
       "reason": self.decision_reason,
       "auto_accepted_on_engagement": self.auto_accepted_this_cycle,
+      "qualified_lower_limit_promoted": self.qualified_lower_limit_promoted,
       "assist_enabled": self.enabled,
       "longitudinal_enabled": self.long_enabled,
       "driver_override": self.long_override,

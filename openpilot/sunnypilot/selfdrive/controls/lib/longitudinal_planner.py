@@ -176,7 +176,8 @@ class LongitudinalPlannerSP:
     # Speed Limit Assist
     has_speed_limit = self.resolver.speed_limit_valid or self.resolver.speed_limit_last_valid
     self.sla.update(long_enabled, long_override, v_ego, a_ego, v_cruise_cluster, self.resolver.speed_limit,
-                    self.resolver.speed_limit_final_last, has_speed_limit, self.resolver.distance, self.events_sp)
+                    self.resolver.speed_limit_final_last, has_speed_limit, self.resolver.distance, self.events_sp,
+                    qualified_lower_limit_promoted=getattr(self.resolver, "qualified_lower_limit_promoted", False))
 
     targets = {
       LongitudinalPlanSource.cruise: (v_cruise, a_ego),
@@ -216,7 +217,8 @@ class LongitudinalPlannerSP:
               getattr(self, "longitudinal_e2e_enabled", True))
     critical_transition = self.sla.state != self.sla._state_prev and (
       self.sla.state in (SpeedLimitAssistState.preActive, SpeedLimitAssistState.disabled) or
-      self.sla._state_prev == SpeedLimitAssistState.preActive or self.sla.decision_reason.startswith("confirmed_"))
+      self.sla._state_prev == SpeedLimitAssistState.preActive or self.sla.decision_reason.startswith("confirmed_") or
+      self.sla.decision_reason == "qualified_lower_boundary_promoted")
     logger.log("slc_application", key, snapshot, force=self.sla.auto_accepted_this_cycle or critical_transition)
 
   def update(self, sm: messaging.SubMaster) -> None:

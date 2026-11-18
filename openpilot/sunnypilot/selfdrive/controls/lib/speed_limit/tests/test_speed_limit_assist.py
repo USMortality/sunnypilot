@@ -171,6 +171,26 @@ class TestSpeedLimitAssist(OpenpilotTestCase):
                     SPEED_LIMITS['residential'], True, 0, self.events_sp)
     assert self.sla.state == SpeedLimitAssistState.preActive
 
+  @parameterized.expand([(True,), (False,)])
+  def test_qualified_lower_boundary_promotion_accepts_suspicious_drop(self, pcm_op_long):
+    self.sla.pcm_op_long = pcm_op_long
+    previous_limit = SPEED_LIMITS['highway']
+    lower_limit = SPEED_LIMITS['residential']
+    self.initialize_active_state(previous_limit)
+    self.sla.long_enabled_prev = True
+    self.sla.speed_limit_prev = previous_limit
+    self.sla.prev_speed_limit_final_last_conv = round(previous_limit * self.speed_conv)
+    self.sla.prev_v_cruise_cluster_conv = round(previous_limit * self.speed_conv)
+
+    self.sla.update(True, False, previous_limit, 0., previous_limit, lower_limit, lower_limit, True, 0., self.events_sp,
+                    qualified_lower_limit_promoted=True)
+
+    assert self.sla.suspicious_drop_this_cycle
+    assert self.sla.decision_reason == 'qualified_lower_boundary_promoted'
+    assert self.sla.state in ACTIVE_STATES
+    assert self.sla.output_v_target == lower_limit
+    assert EventNameSP.speedLimitPreActive not in self.events_sp.names
+
   def test_transition_disabled_to_pending_no_speed_limit_not_max_initial_set_speed(self):
     for _ in range(int(3. / DT_MDL)):
       self.sla.update(True, False, SPEED_LIMITS['highway'], 0, SPEED_LIMITS['city'], 0, 0, False, 0, self.events_sp)

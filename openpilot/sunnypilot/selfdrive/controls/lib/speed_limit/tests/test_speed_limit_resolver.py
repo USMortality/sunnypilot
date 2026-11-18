@@ -571,8 +571,12 @@ class TestSpeedLimitResolverValidation(OpenpilotTestCase):
     sm['liveMapDataSP'].speedLimitAheadValid = False
     self.observe(resolver, sm, clock, 104.2, 0.)
     assert resolver.speed_limit == 20.
+    assert resolver.qualified_lower_limit_promoted
     assert not resolver.lower_lookahead_active
     assert resolver.approach_distance == 0.
+
+    self.observe(resolver, sm, clock, 104.4, 0.)
+    assert not resolver.qualified_lower_limit_promoted
 
   def test_boundary_handoff_hold_persists_until_current_limit_updates(self, resolver_class, mocker):
     resolver, sm, clock = self.ahead_scenario(resolver_class, mocker)

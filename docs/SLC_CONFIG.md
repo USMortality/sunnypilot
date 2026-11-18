@@ -61,7 +61,8 @@ In assist mode, enabling longitudinal control automatically accepts a valid curr
 including the configured speed offset, without a confirmation prompt. This also applies when
 re-engaging after braking. Upcoming lookahead limits and retained limits without a valid current
 reading are not automatically accepted on engagement. Later transitions keep their existing
-confirmation behavior. This does not save any location data.
+confirmation behavior, except that a lower limit already qualified by map lookahead is accepted
+when mapd promotes that same limit to current. This does not save any location data.
 
 ## Example
 
